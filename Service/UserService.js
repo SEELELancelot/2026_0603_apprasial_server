@@ -111,7 +111,7 @@ class UserService {
             const result = await pool.execute(sql, ["0011", "0185"]);
             return { success: 1, message: result[0][0] };
         }
-        // 3️⃣ 分機小姐 0035
+        // 3️⃣  0035
         else if (USER_ID === "0035") {
             sql = `
                 SELECT JSON_ARRAYAGG(JSON_OBJECT(
