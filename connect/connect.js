@@ -5,11 +5,10 @@ const pool = mysql.createPool({
     database: "chfa_employee_record",
     user: 'root',
     password: "root",
-    port: 3306,
+    port: 3307,
     multipleStatements: true,
     charset: "utf8"
 });
-
 
 pool.getConnection((err, connection) => {
     if (err) {
