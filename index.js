@@ -5,6 +5,7 @@ const cors = require('cors');
 const authRouter = require("./routers/auth");
 const officeRouter = require("./routers/office");
 const dropDownRouter=require("./routers/dropDown");
+const approvalRouter = require("./routers/approval");
 
 const app = express();
 const http = require('http').Server(app);
@@ -15,6 +16,8 @@ app.use(express.static(__dirname + '/public'));
 app.use("/login", authRouter);
 app.use("/office", officeRouter);
 app.use('/dropDown',dropDownRouter);
+// ✅ 簽核流程
+app.use("/approval", approvalRouter);
 app.use(errorHandle);
 http.listen(7511, '0.0.0.0', function () {
     console.log("server 啟動");

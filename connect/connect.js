@@ -5,7 +5,7 @@ const pool = mysql.createPool({
     database: "chfa_employee_record",
     user: 'root',
     password: "root",
-    port: 3307,
+    port: 3306,
     multipleStatements: true,
     charset: "utf8"
 });

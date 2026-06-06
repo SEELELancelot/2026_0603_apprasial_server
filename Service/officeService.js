@@ -396,15 +396,15 @@ class OfficeService {
     };
 
     getBonusTableFetchService = async (req) => {
-        const {USER_ID, admin_type} = req.mydata;
-        let {year} = req.query;
+        const { USER_ID, admin_type } = req.mydata;
+        let { year, statusMode = 'all' } = req.query;
 
         // 預設為今年民國年
         if (!year) {
             year = (new Date().getFullYear() - 1911).toString();
         }
 
-        // 動態條件
+        // 動態年度條件
         let yearCondition = '';
         let yearParams = [];
 
@@ -415,56 +415,170 @@ class OfficeService {
 
         try {
             let sql = '';
-            let result = null;
+            let params = [];
 
+            /**
+             * type = 3 端午
+             *
+             * 重點：
+             * 1. 一定要 LEFT JOIN approval_instance
+             * 2. 一定要 LEFT JOIN approval_instance_step
+             * 3. 要回傳 approval_status、current_approver_user_id
+             * 4. 抽單 withdrawn 不 join，讓它回到未送出
+             */
+            const baseSelect = `
+                SELECT
+                    U.USER_NAME,
+
+                    AE.excel_id,
+                    AE.excel_Name,
+                    AE.excel_Send,
+                    AE.create_time,
+                    AE.create_year_tw,
+                    AE.type,
+                    AE.create_userId AS create_user,
+
+                    A.approval_id AS approval_id,
+                    A.applicant_user_id AS applicant_user_id,
+                    A.status AS approval_status,
+                    A.current_step_no AS current_step_no,
+
+                    S.step_name AS current_step_name,
+                    S.approver_user_id AS current_approver_user_id,
+                    S.approver_name AS current_approver_name,
+                    S.status AS current_step_status
+
+                FROM appraisal_excel AE
+
+                         LEFT JOIN user_data U
+                                   ON AE.create_userId = U.USER_ID
+
+                         LEFT JOIN approval_instance A
+                                   ON A.business_table = 'appraisal_excel'
+                                       AND A.business_id = AE.excel_id
+                                       AND A.status <> 'withdrawn'
+
+                         LEFT JOIN approval_instance_step S
+                                   ON S.approval_id = A.approval_id
+                                       AND S.step_no = A.current_step_no
+                                       AND S.status = 'pending'
+            `;
+
+            /**
+             * ✅ 一般使用者
+             *
+             * 要看到：
+             * 1. 自己建立的文件
+             * 2. 別人送給自己簽核的文件
+             */
             if (admin_type === '0') {
                 sql = `
-                    SELECT excel_id, excel_Name, excel_Send, create_time
-                    FROM appraisal_excel AE
-                    WHERE create_userId = ?
-                      AND type = ? ${yearCondition}
-                    ORDER BY create_time DESC
-                `;
-                result = await pool.execute(sql, [USER_ID, '3', ...yearParams]);
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND (
+                        AE.create_userId = ?
+                        OR (
+                            A.status = 'pending'
+                            AND S.approver_user_id = ?
+                        )
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
 
-            } else if (admin_type === '1') {
-                sql = `
-                    SELECT U.USER_NAME, AE.excel_id, AE.excel_Name, AE.excel_Send, AE.create_time
-                    FROM appraisal_excel AE
-                             JOIN user_data U ON AE.create_userId = U.USER_ID
-                    WHERE (
-                              (AE.excel_Send = '1' AND AE.type = ?)
-                                  OR (AE.create_userId = '6868' AND AE.type = ?)
-                              )
-                        ${yearCondition}
-                    ORDER BY AE.create_time DESC
-                `;
-                result = await pool.execute(sql, ['3', '3', ...yearParams]);
+                params = [
+                    '3',
+                    USER_ID,
+                    USER_ID,
+                    ...yearParams,
+                ];
             }
+
+            /**
+             * ✅ 管理者 / 主管
+             *
+             * 要看到：
+             * 1. 已送出的文件
+             * 2. 自己建立的文件
+             * 3. 別人送給自己簽核的文件
+             *
+             * 這樣郭秘書 / 總幹事才會看到別人送來的。
+             */
+            else if (admin_type === '1') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND (
+                        AE.excel_Send = '1'
+                        OR AE.create_userId = ?
+                        OR (
+                            A.status = 'pending'
+                            AND S.approver_user_id = ?
+                        )
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '3',
+                    USER_ID,
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            /**
+             * ✅ 可選：只看待我簽核
+             */
+            if (statusMode === 'pendingMine') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND A.status = 'pending'
+                  AND S.approver_user_id = ?
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '3',
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            console.log('getBonusTableFetchService SQL =', sql);
+            console.log('getBonusTableFetchService params =', params);
+
+            const result = await pool.execute(sql, params);
 
             return {
                 success: 1,
-                message: result[0]
+                message: result[0],
             };
         } catch (e) {
             console.error('getBonusTableFetchService error:', e);
+
             return {
                 success: -1,
-                message: '查詢失敗'
+                message: '查詢失敗',
             };
         }
     };
 
-    getBonusAutTableFetchService=async (req)=>{
-        const {USER_ID, admin_type} = req.mydata;
-        let {year} = req.query;
+    getBonusAutTableFetchService = async (req) => {
+        const { USER_ID, admin_type } = req.mydata;
+        let { year, statusMode = 'all' } = req.query;
 
-        // 預設為今年民國年
+        // ✅ 年度處理
         if (!year) {
             year = (new Date().getFullYear() - 1911).toString();
         }
 
-        // 動態條件
+        // ✅ 如果前端傳 115年，轉成 115
+        year = String(year).replace('年', '');
+
         let yearCondition = '';
         let yearParams = [];
 
@@ -475,45 +589,160 @@ class OfficeService {
 
         try {
             let sql = '';
-            let result = null;
+            let params = [];
 
-            if (admin_type === '0') {
-                sql = `
-                    SELECT excel_id, excel_Name, excel_Send, create_time
-                    FROM appraisal_excel AE
-                    WHERE create_userId = ?
-                      AND type = ? ${yearCondition}
-                    ORDER BY create_time DESC
-                `;
-                result = await pool.execute(sql, [USER_ID, '4', ...yearParams]);
+            /**
+             * ✅ 共用查詢
+             *
+             * 注意欄位 alias：
+             * A.approval_id AS approval_id
+             * A.status AS approval_status
+             * S.approver_user_id AS current_approver_user_id
+             *
+             * 前端 ApprovalRowPolicy 會吃這些欄位。
+             */
+            const baseSelect = `
+                SELECT
+                    U.USER_NAME,
 
-            } else if (admin_type === '1') {
+                    AE.excel_id,
+                    AE.excel_Name,
+                    AE.excel_Send,
+                    AE.create_time,
+                    AE.create_year_tw,
+                    AE.type,
+                    AE.create_userId AS create_user,
+
+                    A.approval_id AS approval_id,
+                    A.applicant_user_id AS applicant_user_id,
+                    A.status AS approval_status,
+                    A.current_step_no AS current_step_no,
+
+                    S.step_name AS current_step_name,
+                    S.approver_user_id AS current_approver_user_id,
+                    S.approver_name AS current_approver_name,
+                    S.status AS current_step_status
+
+                FROM appraisal_excel AE
+
+                         LEFT JOIN user_data U
+                                   ON AE.create_userId = U.USER_ID
+
+                         LEFT JOIN approval_instance A
+                                   ON A.business_table = 'appraisal_excel'
+                                       AND A.business_id = AE.excel_id
+                                       AND A.status <> 'withdrawn'
+
+                         LEFT JOIN approval_instance_step S
+                                   ON S.approval_id = A.approval_id
+                                       AND S.step_no = A.current_step_no
+                                       AND S.status = 'pending'
+            `;
+
+            /**
+             * ✅ 只看待我簽核
+             */
+            if (statusMode === 'pendingMine') {
                 sql = `
-                    SELECT U.USER_NAME, AE.excel_id, AE.excel_Name, AE.excel_Send, AE.create_time
-                    FROM appraisal_excel AE
-                             JOIN user_data U ON AE.create_userId = U.USER_ID
-                    WHERE (
-                              (AE.excel_Send = '1' AND AE.type = ?)
-                                  OR (AE.create_userId = '6868' AND AE.type = ?)
-                              )
-                        ${yearCondition}
-                    ORDER BY AE.create_time DESC
-                `;
-                result = await pool.execute(sql, ['4', '4', ...yearParams]);
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND A.status = 'pending'
+                  AND S.approver_user_id = ?
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '4',
+                    USER_ID,
+                    ...yearParams,
+                ];
             }
+
+            /**
+             * ✅ 一般使用者
+             *
+             * 看得到：
+             * 1. 自己建立的資料
+             * 2. 目前關卡送給自己簽核的資料
+             */
+            else if (admin_type === '0') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND (
+                        AE.create_userId = ?
+                        OR (
+                            A.status = 'pending'
+                            AND S.approver_user_id = ?
+                        )
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '4',
+                    USER_ID,
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            /**
+             * ✅ 管理者 / 主管
+             *
+             * 看得到：
+             * 1. 已送出的資料
+             * 2. 自己建立的資料
+             * 3. 目前關卡送給自己簽核的資料
+             */
+            else if (admin_type === '1') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND (
+                        AE.excel_Send = '1'
+                        OR AE.create_userId = ?
+                        OR (
+                            A.status = 'pending'
+                            AND S.approver_user_id = ?
+                        )
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '4',
+                    USER_ID,
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            console.log('getBonusAutTableFetchService USER_ID =', USER_ID);
+            console.log('getBonusAutTableFetchService admin_type =', admin_type);
+            console.log('getBonusAutTableFetchService year =', year);
+            console.log('getBonusAutTableFetchService statusMode =', statusMode);
+            console.log('getBonusAutTableFetchService SQL =', sql);
+            console.log('getBonusAutTableFetchService params =', params);
+
+            const result = await pool.execute(sql, params);
 
             return {
                 success: 1,
-                message: result[0]
+                message: result ? result[0] : [],
             };
         } catch (e) {
-            console.error('getBonusTableFetchService error:', e);
+            console.error('getBonusAutTableFetchService error:', e);
+
             return {
                 success: -1,
-                message: '查詢失敗'
+                message: '查詢失敗',
             };
         }
-    }
+    };
 
     checkValueExistArray = (employeeName, ManagerArray) => {
         const isManager = ManagerArray.some(item => item?.USER_NAME === employeeName);
