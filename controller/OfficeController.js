@@ -510,38 +510,73 @@ class OfficeController {
      * 若之後平時考核也要歷史版本，可以比照端午 / 中秋改。
      */
     async AppraisalRecordExcel(req, res, next) {
-        const documentName = getOnlyFileName(req?.query?.documentName);
+        const documentName = req?.query?.documentName;
 
-        const pathForSave = path.resolve(
+        const currentDirPath = path.resolve(
             __dirname,
             "../public",
             "office",
             "excel",
-            "EmployeeAppraisalExcelManager",
-            documentName
+            "EmployeeAppraisalExcelManager"
         );
 
-        handleSimpleOnlyOfficeCallback(req, res, pathForSave);
-    }
+        const historyDirPath = path.resolve(
+            __dirname,
+            "../public",
+            "office",
+            "excel",
+            "history",
+            "EmployeeAppraisalExcelHistory"
+        );
 
+        const historyRelativeDir =
+            "office/excel/history/EmployeeAppraisalExcelHistory";
+
+        await handleOnlyOfficeCallbackWithHistory({
+            req,
+            res,
+            documentName,
+            currentDirPath,
+            historyDirPath,
+            historyRelativeDir,
+        });
+    }
     /**
      * ✅ 年度考核 callback
      *
      * 目前先維持原本覆蓋邏輯。
      */
     async AppraisalYearRecordExcel(req, res, next) {
-        const documentName = getOnlyFileName(req?.query?.documentName);
+        const documentName = req?.query?.documentName;
 
-        const pathForSave = path.resolve(
+        const currentDirPath = path.resolve(
             __dirname,
             "../public",
             "office",
             "excel",
-            "EmployeeAppraisalExcelYear",
-            documentName
+            "EmployeeAppraisalExcelYear"
         );
 
-        handleSimpleOnlyOfficeCallback(req, res, pathForSave);
+        const historyDirPath = path.resolve(
+            __dirname,
+            "../public",
+            "office",
+            "excel",
+            "history",
+            "EmployeeYearAppraisalExcelHistory"
+        );
+
+        const historyRelativeDir =
+            "office/excel/history/EmployeeYearAppraisalExcelHistory";
+
+        await handleOnlyOfficeCallbackWithHistory({
+            req,
+            res,
+            documentName,
+            currentDirPath,
+            historyDirPath,
+            historyRelativeDir,
+        });
     }
 
     /**

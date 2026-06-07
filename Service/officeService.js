@@ -10,6 +10,59 @@ const fs = require("fs");
 const {EXCEL_PASSWORD} = require("../constants/excelPassword/excelPassword");
 const OfficeUtils = require("../utils/OfficeUtils");
 const {DateUtils} = require("../utils/DateUtils");
+const OfficeFileVersionService = require("../Service/officeFileVersionService");
+
+/**
+ * ✅ 建立資料夾
+ */
+function ensureDir(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+    }
+}
+
+/**
+ * ✅ 避免 Windows 檔名不合法字元
+ */
+function getSafeFileName(fileName) {
+    return String(fileName || "")
+        .replace(/[\\/:*?"<>|]/g, "_")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+/**
+ * ✅ 建立初始草稿版本 key
+ *
+ * 這個 key 要跟前端新建時 callbackUrl 的 editRoundKey=draft_0 對上。
+ *
+ * 新建當下：
+ * approval_id = null
+ * approval_step_id = null
+ * editRoundKey = draft_0
+ */
+function buildInitialVersionKey({ editorUserId }) {
+    return `approval:no_approval:round:draft_0:user:${editorUserId || "unknown_user"}`;
+}
+
+/**
+ * ✅ 建立初始版本檔名
+ *
+ * 範例：
+ * (企劃部) 端午發放獎金調查紀錄表 (2026-06-07 21-14-35)_V001_黃明田.xlsx
+ */
+function buildInitialVersionFileName({
+                                         originalFileName,
+                                         versionNo,
+                                         editorUser,
+                                     }) {
+    const ext = path.extname(originalFileName) || ".xlsx";
+    const baseName = path.basename(originalFileName, ext);
+    const safeBaseName = getSafeFileName(baseName);
+    const editorName = getSafeFileName(editorUser?.USER_NAME || "unknown");
+
+    return `${safeBaseName}_V${String(versionNo).padStart(3, "0")}_${editorName}${ext}`;
+}
 
 class OfficeService {
     deleteExcelFile = async (name) => {
@@ -95,36 +148,239 @@ class OfficeService {
     }
 
     writeOfficeData = async (req, fileName, date) => {
-        const {USER_ID} = req.mydata;
-        const createTime = moment(date).format("YYYY-MM-DD HH:mm:ss");
-        const year=DateUtils.getCurrentTaiwanYear();
+        const { USER_ID } = req.mydata;
 
-        const sql = `INSERT INTO appraisal_excel (excel_id, create_userId, excel_Name, create_time,create_year_tw)
-                     VALUES (?, ?, ?, ?,?)`;
-        const result = await pool.execute(sql, [uuidv4(), USER_ID, fileName, createTime,year]);
-    }
+        const excelId = uuidv4();
+        const createTime = moment(date).format("YYYY-MM-DD HH:mm:ss");
+        const year = DateUtils.getCurrentTaiwanYear();
+
+        const sql = `
+        INSERT INTO appraisal_excel
+            (
+                excel_id,
+                create_userId,
+                excel_Name,
+                type,
+                create_time,
+                create_year_tw
+            )
+        VALUES
+            (?, ?, ?, ?, ?, ?)
+    `;
+
+        await pool.execute(sql, [
+            excelId,
+            USER_ID,
+            fileName,
+            '1',
+            createTime,
+            year,
+        ]);
+
+        return {
+            excelId,
+            excelName: fileName,
+        };
+    };
 
     writeYearOfficeData = async (req, fileName, date) => {
-        const {USER_ID} = req.mydata;
+        const { USER_ID } = req.mydata;
+
+        const excelId = uuidv4();
         const createTime = moment(date).format("YYYY-MM-DD HH:mm:ss");
-        const year=DateUtils.getCurrentTaiwanYear();
+        const year = DateUtils.getCurrentTaiwanYear();
 
-        const sql = `INSERT INTO appraisal_excel (excel_id, create_userId, excel_Name, type, create_time,create_year_tw)
-                     VALUES (?, ?, ?, ?, ?,?)`;
+        const sql = `
+        INSERT INTO appraisal_excel
+            (
+                excel_id,
+                create_userId,
+                excel_Name,
+                type,
+                create_time,
+                create_year_tw
+            )
+        VALUES
+            (?, ?, ?, ?, ?, ?)
+    `;
 
-        const result = await pool.execute(sql, [uuidv4(), USER_ID, fileName, '2', createTime,year]);
-    }
+        await pool.execute(sql, [
+            excelId,
+            USER_ID,
+            fileName,
+            "2",
+            createTime,
+            year,
+        ]);
+
+        return {
+            excelId,
+            excelName: fileName,
+        };
+    };
 
     writeBonusData = async (req, fileName, date) => {
-        const {USER_ID} = req.mydata;
+        const { USER_ID } = req.mydata;
+
+        const excelId = uuidv4();
         const createTime = moment(date).format("YYYY-MM-DD HH:mm:ss");
+        const year = DateUtils.getCurrentTaiwanYear();
 
-        const year=DateUtils.getCurrentTaiwanYear();
-        const sql = `INSERT INTO appraisal_excel (excel_id, create_userId, excel_Name, type, create_time,create_year_tw)
-                     VALUES (?, ?, ?, ?, ?,?)`;
+        const sql = `
+        INSERT INTO appraisal_excel
+            (excel_id, create_userId, excel_Name, type, create_time, create_year_tw)
+        VALUES
+            (?, ?, ?, ?, ?, ?)
+    `;
 
-        const result = await pool.execute(sql, [uuidv4(), USER_ID, fileName, '3', createTime,year]);
-    }
+        await pool.execute(sql, [
+            excelId,
+            USER_ID,
+            fileName,
+            '3',
+            createTime,
+            year,
+        ]);
+
+        return {
+            excelId,
+            excelName: fileName,
+        };
+    };
+
+    createInitialBonusHistoryVersion = async ({
+                                                  excelId,
+                                                  fileName,
+                                                  currentFilePath,
+                                                  req,
+                                              }) => {
+        if (!excelId || !fileName) {
+            console.warn("createInitialBonusHistoryVersion 缺少 excelId 或 fileName");
+            return null;
+        }
+
+        if (!currentFilePath || !fs.existsSync(currentFilePath)) {
+            console.warn(
+                "createInitialBonusHistoryVersion 找不到正式檔：",
+                currentFilePath
+            );
+            return null;
+        }
+
+        const editorUser = {
+            USER_ID: req?.mydata?.USER_ID || null,
+            USER_NAME: req?.mydata?.USER_NAME || null,
+            MISS_NAME: req?.mydata?.MISS_NAME || null,
+            BRANCH_NAME: req?.mydata?.BRANCH_NAME || null,
+        };
+
+        const historyDirPath = path.resolve(
+            __dirname,
+            "../public",
+            "office",
+            "excel",
+            "history",
+            "EmployeeBonusExcelHistory"
+        );
+
+        const historyRelativeDir = "office/excel/history/EmployeeBonusExcelHistory";
+
+        ensureDir(historyDirPath);
+
+        let conn = null;
+
+        try {
+            conn = await pool.getConnection();
+            await conn.beginTransaction();
+
+            const versionKey = buildInitialVersionKey({
+                editorUserId: editorUser.USER_ID,
+            });
+
+            /**
+             * ✅ 查是否已存在 draft_0 版本
+             *
+             * 正常新建時不會有。
+             * 但保險起見，若重複呼叫就更新同一筆。
+             */
+            const oldVersion = await OfficeFileVersionService.getExcelFileVersionByKey(
+                conn,
+                excelId,
+                versionKey
+            );
+
+            const versionNo =
+                oldVersion?.version_no ||
+                (await OfficeFileVersionService.getNextExcelFileVersionNo(
+                    conn,
+                    excelId
+                ));
+
+            const versionFileName =
+                oldVersion?.version_file_name ||
+                buildInitialVersionFileName({
+                    originalFileName: fileName,
+                    versionNo,
+                    editorUser,
+                });
+
+            const fullVersionFilePath = path.join(historyDirPath, versionFileName);
+            const versionRelativePath = `${historyRelativeDir}/${versionFileName}`;
+
+            /**
+             * ✅ 複製正式檔到歷史資料夾
+             */
+            fs.copyFileSync(currentFilePath, fullVersionFilePath);
+
+            /**
+             * ✅ 寫入 / 更新歷史版本資料
+             */
+            const result =
+                await OfficeFileVersionService.createOrUpdateExcelFileVersionRecordWithConn(
+                    conn,
+                    {
+                        excelId,
+                        approvalId: null,
+                        approvalStepId: null,
+                        versionKey,
+                        versionType: "initial_draft",
+                        editorUser,
+                        originalFileName: fileName,
+                        versionFileName,
+                        versionFilePath: versionRelativePath,
+                        remark: "建立時初始草稿版本",
+                    }
+                );
+
+            await conn.commit();
+
+            return {
+                success: 1,
+                message: {
+                    ...result,
+                    versionKey,
+                    versionNo,
+                    versionFileName,
+                    versionFilePath: versionRelativePath,
+                },
+            };
+        } catch (e) {
+            if (conn) {
+                await conn.rollback();
+            }
+
+            console.error("createInitialBonusHistoryVersion error:", e);
+
+            return {
+                success: -1,
+                message: e.message || "建立初始歷史版本失敗",
+            };
+        } finally {
+            if (conn) {
+                conn.release();
+            }
+        }
+    };
 
     writeAutBonusData = async (req, fileName, date) => {
         const {USER_ID} = req.mydata;
@@ -348,76 +604,18 @@ class OfficeService {
         }
     };
     getAppraisalTableFetch = async (req) => {
-        const {USER_ID, admin_type} = req.mydata;
-        let {year} = req.query;  // 前端傳來的年份
+        const { USER_ID, admin_type } = req.mydata;
+        let { year, statusMode = 'all' } = req.query;
 
-        // 若前端沒帶 year，則默認今年（民國年）
+        // ✅ 預設今年民國年
         if (!year) {
             year = (new Date().getFullYear() - 1911).toString();
         }
 
-        // 動態年份篩選條件
-        let yearCondition = '';
-        let yearParams = [];
+        // ✅ 如果前端傳 115年，轉成 115
+        year = String(year).replace('年', '');
 
-        if (year !== 'ALL') {
-            yearCondition = ' AND create_year_tw = ? ';
-            yearParams = [year];
-        }
-
-        try {
-            let sql = '';
-            let result = null;
-
-            if (admin_type === '0') {
-                sql = `
-                    SELECT excel_id, excel_Name, excel_Send, create_time
-                    FROM appraisal_excel
-                    WHERE create_userId = ?
-                      AND type = ? ${yearCondition}
-                    ORDER BY create_time DESC
-                `;
-                result = await pool.execute(sql, [USER_ID, '1', ...yearParams]);
-
-            } else if (admin_type === '1') {
-                sql = `
-                    SELECT U.USER_NAME, AE.excel_id, AE.excel_Name, AE.excel_Send, AE.create_time
-                    FROM appraisal_excel AE
-                             JOIN user_data U ON AE.create_userId = U.USER_ID
-                    WHERE (
-                              (AE.excel_Send = '1' AND AE.type = ?)
-                                  OR (AE.create_userId = '6868' AND AE.type = ?)
-                              )
-                        ${yearCondition}
-                    ORDER BY AE.create_time DESC
-                `;
-                result = await pool.execute(sql, ['1', '1', ...yearParams]);
-            }
-
-            return {
-                success: 1,
-                message: result[0]
-            };
-
-        } catch (e) {
-            console.error('getAppraisalTableFetch error:', e);
-            return {
-                success: -1,
-                message: '查詢失敗'
-            };
-        }
-    }
-
-
-    getYearAppraisalTableFetch = async (req) => {
-        const {USER_ID, admin_type} = req.mydata;
-        let {year} = req.query;
-
-        // 預設為今年的民國年
-        if (!year) {
-            year = (new Date().getFullYear() - 1911).toString();
-        }
-
+        // ✅ 動態年度條件
         let yearCondition = '';
         let yearParams = [];
 
@@ -428,42 +626,418 @@ class OfficeService {
 
         try {
             let sql = '';
-            let result = null;
+            let params = [];
 
-            if (admin_type === '0') {
-                sql = `
-                    SELECT excel_id, excel_Name, excel_Send, create_time
-                    FROM appraisal_excel AE
-                    WHERE create_userId = ?
-                      AND type = ? ${yearCondition}
-                    ORDER BY create_time DESC
-                `;
-                result = await pool.execute(sql, [USER_ID, '2', ...yearParams]);
+            /**
+             * ✅ 平時考核列表共用查詢
+             *
+             * type = 1 平時考核
+             *
+             * 重點：
+             * 1. LEFT JOIN approval_instance
+             * 2. LEFT JOIN approval_instance_step
+             * 3. 回傳 approval_status、approval_id、applicant_user_id
+             * 4. 回傳 current_approver_user_id，給前端判斷是不是目前簽核者
+             * 5. A.status <> 'withdrawn'，抽單後讓它回到未送出狀態
+             */
+            const baseSelect = `
+            SELECT
+                U.USER_NAME,
 
-            } else if (admin_type === '1') {
+                AE.excel_id,
+                AE.excel_Name,
+                AE.excel_Send,
+                AE.create_time,
+                AE.create_year_tw,
+                AE.type,
+                AE.create_userId AS create_user,
+
+                A.approval_id AS approval_id,
+                A.applicant_user_id AS applicant_user_id,
+                A.status AS approval_status,
+                A.current_step_no AS current_step_no,
+
+                S.step_id AS current_step_id,
+                S.step_name AS current_step_name,
+                S.approver_user_id AS current_approver_user_id,
+                S.approver_name AS current_approver_name,
+                S.approver_miss_id AS current_approver_miss_id,
+                S.approver_miss_name AS current_approver_miss_name,
+                S.approver_branch_id AS current_approver_branch_id,
+                S.approver_branch_name AS current_approver_branch_name,
+                S.status AS current_step_status
+
+            FROM appraisal_excel AE
+
+                     LEFT JOIN user_data U
+                               ON AE.create_userId = U.USER_ID
+
+                     LEFT JOIN approval_instance A
+                               ON A.business_table = 'appraisal_excel'
+                                   AND A.business_id = AE.excel_id
+                                   AND A.status <> 'withdrawn'
+
+                     LEFT JOIN approval_instance_step S
+                               ON S.approval_id = A.approval_id
+                                   AND S.step_no = A.current_step_no
+                                   AND S.status = 'pending'
+        `;
+
+            /**
+             * ✅ 只看待我簽核
+             */
+            if (statusMode === 'pendingMine') {
                 sql = `
-                    SELECT U.USER_NAME, AE.excel_id, AE.excel_Name, AE.excel_Send, AE.create_time
-                    FROM appraisal_excel AE
-                             JOIN user_data U ON AE.create_userId = U.USER_ID
-                    WHERE (
-                              (AE.excel_Send = '1' AND AE.type = ?)
-                                  OR (AE.create_userId = '6868' AND AE.type = ?)
-                              )
-                        ${yearCondition}
-                    ORDER BY AE.create_time DESC
-                `;
-                result = await pool.execute(sql, ['2', '2', ...yearParams]);
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND A.status = 'pending'
+                  AND S.approver_user_id = ?
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '1',
+                    USER_ID,
+                    ...yearParams,
+                ];
             }
+
+            /**
+             * ✅ 只看我自己建立、尚未送出的資料
+             */
+            else if (statusMode === 'mine') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND AE.create_userId = ?
+                  AND (
+                        A.approval_id IS NULL
+                        OR A.status = 'draft'
+                        OR A.status = 'returned'
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '1',
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            /**
+             * ✅ 一般使用者
+             *
+             * 看得到：
+             * 1. 自己建立的資料
+             * 2. 目前關卡送給自己簽核的資料
+             */
+            else if (admin_type === '0') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND (
+                        AE.create_userId = ?
+                        OR (
+                            A.status = 'pending'
+                            AND S.approver_user_id = ?
+                        )
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '1',
+                    USER_ID,
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            /**
+             * ✅ 管理者 / 主管
+             *
+             * 看得到：
+             * 1. 已送出的資料
+             * 2. 自己建立的資料
+             * 3. 目前關卡送給自己簽核的資料
+             *
+             * 注意：
+             * 原本你寫 AE.create_userId = '6868'
+             * 這樣只有總幹事自己的草稿會出現。
+             * 改成 AE.create_userId = USER_ID，任何管理者自己建立的也看得到。
+             */
+            else if (admin_type === '1') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND (
+                        AE.excel_Send = '1'
+                        OR AE.create_userId = ?
+                        OR (
+                            A.status = 'pending'
+                            AND S.approver_user_id = ?
+                        )
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '1',
+                    USER_ID,
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            console.log('getAppraisalTableFetch USER_ID =', USER_ID);
+            console.log('getAppraisalTableFetch admin_type =', admin_type);
+            console.log('getAppraisalTableFetch year =', year);
+            console.log('getAppraisalTableFetch statusMode =', statusMode);
+            console.log('getAppraisalTableFetch SQL =', sql);
+            console.log('getAppraisalTableFetch params =', params);
+
+            const result = await pool.execute(sql, params);
 
             return {
                 success: 1,
-                message: result[0]
+                message: result ? result[0] : [],
+            };
+        } catch (e) {
+            console.error('getAppraisalTableFetch error:', e);
+
+            return {
+                success: -1,
+                message: '查詢失敗',
+            };
+        }
+    };
+
+
+    getYearAppraisalTableFetch = async (req) => {
+        const { USER_ID, admin_type } = req.mydata;
+        let { year, statusMode = 'all' } = req.query;
+
+        // ✅ 預設今年民國年
+        if (!year) {
+            year = (new Date().getFullYear() - 1911).toString();
+        }
+
+        // ✅ 如果前端傳 115年，轉成 115
+        year = String(year).replace('年', '');
+
+        // ✅ 動態年度條件
+        let yearCondition = '';
+        let yearParams = [];
+
+        if (year !== 'ALL') {
+            yearCondition = ' AND AE.create_year_tw = ? ';
+            yearParams = [year];
+        }
+
+        try {
+            let sql = '';
+            let params = [];
+
+            /**
+             * ✅ 年度考核列表共用查詢
+             *
+             * type = 2 年度考核
+             *
+             * 重點：
+             * 1. LEFT JOIN approval_instance
+             * 2. LEFT JOIN approval_instance_step
+             * 3. 回傳 approval_status、approval_id、applicant_user_id
+             * 4. 回傳 current_approver_user_id，給前端判斷是不是目前簽核者
+             * 5. A.status <> 'withdrawn'，抽單後讓它回到未送出狀態
+             */
+            const baseSelect = `
+            SELECT
+                U.USER_NAME,
+
+                AE.excel_id,
+                AE.excel_Name,
+                AE.excel_Send,
+                AE.create_time,
+                AE.create_year_tw,
+                AE.type,
+                AE.create_userId AS create_user,
+
+                A.approval_id AS approval_id,
+                A.applicant_user_id AS applicant_user_id,
+                A.status AS approval_status,
+                A.current_step_no AS current_step_no,
+
+                S.step_id AS current_step_id,
+                S.step_name AS current_step_name,
+                S.approver_user_id AS current_approver_user_id,
+                S.approver_name AS current_approver_name,
+                S.approver_miss_id AS current_approver_miss_id,
+                S.approver_miss_name AS current_approver_miss_name,
+                S.approver_branch_id AS current_approver_branch_id,
+                S.approver_branch_name AS current_approver_branch_name,
+                S.status AS current_step_status
+
+            FROM appraisal_excel AE
+
+                     LEFT JOIN user_data U
+                               ON AE.create_userId = U.USER_ID
+
+                     LEFT JOIN approval_instance A
+                               ON A.business_table = 'appraisal_excel'
+                                   AND A.business_id = AE.excel_id
+                                   AND A.status <> 'withdrawn'
+
+                     LEFT JOIN approval_instance_step S
+                               ON S.approval_id = A.approval_id
+                                   AND S.step_no = A.current_step_no
+                                   AND S.status = 'pending'
+        `;
+
+            /**
+             * ✅ 只看待我簽核
+             */
+            if (statusMode === 'pendingMine') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND A.status = 'pending'
+                  AND S.approver_user_id = ?
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '2',
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            /**
+             * ✅ 只看我自己建立、尚未送出的資料
+             */
+            else if (statusMode === 'mine') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND AE.create_userId = ?
+                  AND (
+                        A.approval_id IS NULL
+                        OR A.status = 'draft'
+                        OR A.status = 'returned'
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '2',
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            /**
+             * ✅ 一般使用者
+             *
+             * 看得到：
+             * 1. 自己建立的資料
+             * 2. 目前關卡送給自己簽核的資料
+             */
+            else if (admin_type === '0') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND (
+                        AE.create_userId = ?
+                        OR (
+                            A.status = 'pending'
+                            AND S.approver_user_id = ?
+                        )
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '2',
+                    USER_ID,
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            /**
+             * ✅ 管理者 / 主管
+             *
+             * 看得到：
+             * 1. 已送出的資料
+             * 2. 自己建立的資料
+             * 3. 目前關卡送給自己簽核的資料
+             *
+             * 注意：
+             * 原本你寫 AE.create_userId = '6868'
+             * 這樣只有總幹事自己的草稿會出現。
+             * 改成 AE.create_userId = USER_ID，任何管理者自己建立的也看得到。
+             */
+            else if (admin_type === '1') {
+                sql = `
+                ${baseSelect}
+                WHERE AE.type = ?
+                  AND (
+                        AE.excel_Send = '1'
+                        OR AE.create_userId = ?
+                        OR (
+                            A.status = 'pending'
+                            AND S.approver_user_id = ?
+                        )
+                  )
+                  ${yearCondition}
+                ORDER BY AE.create_time DESC
+            `;
+
+                params = [
+                    '2',
+                    USER_ID,
+                    USER_ID,
+                    ...yearParams,
+                ];
+            }
+
+            /**
+             * ✅ 防呆：如果 admin_type 不符合，回空陣列
+             */
+            else {
+                return {
+                    success: 1,
+                    message: [],
+                };
+            }
+
+            console.log('getYearAppraisalTableFetch USER_ID =', USER_ID);
+            console.log('getYearAppraisalTableFetch admin_type =', admin_type);
+            console.log('getYearAppraisalTableFetch year =', year);
+            console.log('getYearAppraisalTableFetch statusMode =', statusMode);
+            console.log('getYearAppraisalTableFetch SQL =', sql);
+            console.log('getYearAppraisalTableFetch params =', params);
+
+            const result = await pool.execute(sql, params);
+
+            return {
+                success: 1,
+                message: result ? result[0] : [],
             };
         } catch (e) {
             console.error('getYearAppraisalTableFetch error:', e);
+
             return {
                 success: -1,
-                message: '查詢失敗'
+                message: '查詢失敗',
             };
         }
     };
@@ -1623,15 +2197,31 @@ class OfficeService {
     }
 
     exportOffice = async (req) => {
-        const {BRANCH_NAME} = req.mydata;
-        const getExcelManagerEmployeeData = JSON.parse(req?.getExcelManagerEmployeeData);
+        const { BRANCH_NAME } = req.mydata;
+
+        const getExcelManagerEmployeeData = JSON.parse(
+            req?.getExcelManagerEmployeeData
+        );
 
         console.log(getExcelManagerEmployeeData);
-        try {
-            const workbook = await XlsxPopulate.fromFileAsync(path.resolve(__dirname, "../public", "office", "excel", "EmployeeAppraisalExcelTemplate", "員工考核紀錄表範本.xlsx"));
-            let templateWorkbook = workbook.sheet("紀錄表");
 
-            // 插入公式到 D13
+        try {
+            const workbook = await XlsxPopulate.fromFileAsync(
+                path.resolve(
+                    __dirname,
+                    "../public",
+                    "office",
+                    "excel",
+                    "EmployeeAppraisalExcelTemplate",
+                    "員工考核紀錄表範本.xlsx"
+                )
+            );
+
+            const templateWorkbook = workbook.sheet("紀錄表");
+
+            /**
+             * ✅ 插入公式到 D13
+             */
             templateWorkbook.cell("D13").formula(
                 `IFERROR(
             IF(
@@ -1646,7 +2236,10 @@ class OfficeService {
             ""
         )`
             );
-            // 插入公式到 D14
+
+            /**
+             * ✅ 插入公式到 D14
+             */
             templateWorkbook.cell("D14").formula(
                 `IFERROR(
         IF(
@@ -1661,9 +2254,14 @@ class OfficeService {
         ""
     )`
             );
+
+            /**
+             * ✅ 依員工建立工作表
+             */
             for (let i = 0; i < getExcelManagerEmployeeData.length; i++) {
-                const {label, BRANCH_NAME,work_content} = getExcelManagerEmployeeData[i];
-                // console.log(label, BRANCH_NAME);
+                const { label, BRANCH_NAME, work_content } =
+                    getExcelManagerEmployeeData[i];
+
                 workbook.cloneSheet(templateWorkbook, label);
 
                 workbook.sheet(label).cell("C2").value(label);
@@ -1671,50 +2269,240 @@ class OfficeService {
                 workbook.sheet(label).cell("H2").value(BRANCH_NAME);
             }
 
-            let date = new Date();
-            const currentDateTime = moment(date).format('YYYY-MM-DD HH-mm-ss');
+            const date = new Date();
+            const currentDateTime = moment(date).format("YYYY-MM-DD HH-mm-ss");
+
             const fileName = `(${BRANCH_NAME}) 員工考核紀錄表 (${currentDateTime}).xlsx`;
-            const pathFileName = path.resolve(__dirname, "../public", "office", "excel", "EmployeeAppraisalExcelManager", fileName);
+
+            const pathFileName = path.resolve(
+                __dirname,
+                "../public",
+                "office",
+                "excel",
+                "EmployeeAppraisalExcelManager",
+                fileName
+            );
+
+            /**
+             * ✅ 先輸出檔案
+             */
             await workbook.toFileAsync(pathFileName);
+
+            /**
+             * ✅ 用 ExcelJS 加入參數表並刪除範本表
+             */
             const deleteWorkbook = new ExcelJS.Workbook();
+
             await deleteWorkbook.xlsx.readFile(pathFileName);
 
-            // 新增工作表
-            const newSheetName = "參數"; // 新的工作表名稱
-            const newSheet = deleteWorkbook.addWorksheet(newSheetName);
+            const newSheetName = "參數";
 
+            const oldParamSheet = deleteWorkbook.getWorksheet(newSheetName);
 
-            for (let i = 0; i < getExcelManagerEmployeeData.length; i++) {
-                const {value, label, BRANCH_NAME, identity} = getExcelManagerEmployeeData[i];
-                newSheet.addRow([value, label, BRANCH_NAME, identity]); //
+            if (oldParamSheet) {
+                deleteWorkbook.removeWorksheet(oldParamSheet.id);
             }
 
-            // 隱藏工作表
+            const newSheet = deleteWorkbook.addWorksheet(newSheetName);
+
+            for (let i = 0; i < getExcelManagerEmployeeData.length; i++) {
+                const { value, label, BRANCH_NAME, identity } =
+                    getExcelManagerEmployeeData[i];
+
+                newSheet.addRow([
+                    value,
+                    label,
+                    BRANCH_NAME,
+                    identity,
+                ]);
+            }
+
             newSheet.state = "hidden";
-            // 設置密碼保護
+
             await newSheet.protect(EXCEL_PASSWORD, {
                 selectLockedCells: false,
                 selectUnlockedCells: false,
             });
-            deleteWorkbook.removeWorksheet("紀錄表");
+
+            const templateSheet = deleteWorkbook.getWorksheet("紀錄表");
+
+            if (templateSheet) {
+                deleteWorkbook.removeWorksheet(templateSheet.id);
+            }
+
             console.log(pathFileName);
+
+            /**
+             * ✅ 儲存正式檔
+             */
             await deleteWorkbook.xlsx.writeFile(pathFileName);
-            await this.writeOfficeData(req, fileName, date);
-            // 保存資料到資料庫
+
+            /**
+             * ✅ 寫入 appraisal_excel，並取得 excelId
+             */
+            const writeResult = await this.writeOfficeData(req, fileName, date);
+
+            /**
+             * ✅ 一建立就先建立一筆歷史版本
+             */
+            const initialVersion = await this.createInitialAppraisalHistoryVersion({
+                excelId: writeResult.excelId,
+                fileName: writeResult.excelName,
+                currentFilePath: pathFileName,
+                req,
+            });
+
             return {
                 success: 1,
                 message: "製造成功",
-                excelName: fileName
-            }
-
+                excelId: writeResult.excelId,
+                excelName: writeResult.excelName,
+                initialVersion,
+            };
         } catch (e) {
-            console.log(e);
+            console.error("exportOffice error:", e);
+
             return {
                 success: -1,
-                message: "製造Excel發生錯誤"
+                message: "製造Excel發生錯誤",
+            };
+        }
+    };
+
+    createInitialAppraisalHistoryVersion = async ({
+                                                      excelId,
+                                                      fileName,
+                                                      currentFilePath,
+                                                      req,
+                                                  }) => {
+        if (!excelId || !fileName) {
+            console.warn("createInitialAppraisalHistoryVersion 缺少 excelId 或 fileName");
+            return null;
+        }
+
+        if (!currentFilePath || !fs.existsSync(currentFilePath)) {
+            console.warn(
+                "createInitialAppraisalHistoryVersion 找不到正式檔：",
+                currentFilePath
+            );
+            return null;
+        }
+
+        const editorUser = {
+            USER_ID: req?.mydata?.USER_ID || null,
+            USER_NAME: req?.mydata?.USER_NAME || null,
+            MISS_NAME: req?.mydata?.MISS_NAME || null,
+            BRANCH_NAME: req?.mydata?.BRANCH_NAME || null,
+        };
+
+        const historyDirPath = path.resolve(
+            __dirname,
+            "../public",
+            "office",
+            "excel",
+            "history",
+            "EmployeeAppraisalExcelHistory"
+        );
+
+        const historyRelativeDir =
+            "office/excel/history/EmployeeAppraisalExcelHistory";
+
+        ensureDir(historyDirPath);
+
+        let conn = null;
+
+        try {
+            conn = await pool.getConnection();
+            await conn.beginTransaction();
+
+            const versionKey = buildInitialVersionKey({
+                editorUserId: editorUser.USER_ID,
+            });
+
+            /**
+             * ✅ 查是否已存在 draft_0 版本
+             *
+             * 正常新建時不會有。
+             * 但保險起見，若重複呼叫就更新同一筆。
+             */
+            const oldVersion = await OfficeFileVersionService.getExcelFileVersionByKey(
+                conn,
+                excelId,
+                versionKey
+            );
+
+            const versionNo =
+                oldVersion?.version_no ||
+                (await OfficeFileVersionService.getNextExcelFileVersionNo(
+                    conn,
+                    excelId
+                ));
+
+            const versionFileName =
+                oldVersion?.version_file_name ||
+                buildInitialVersionFileName({
+                    originalFileName: fileName,
+                    versionNo,
+                    editorUser,
+                });
+
+            const fullVersionFilePath = path.join(historyDirPath, versionFileName);
+            const versionRelativePath = `${historyRelativeDir}/${versionFileName}`;
+
+            /**
+             * ✅ 複製正式檔到歷史資料夾
+             */
+            fs.copyFileSync(currentFilePath, fullVersionFilePath);
+
+            /**
+             * ✅ 寫入 / 更新歷史版本資料
+             */
+            const result =
+                await OfficeFileVersionService.createOrUpdateExcelFileVersionRecordWithConn(
+                    conn,
+                    {
+                        excelId,
+                        approvalId: null,
+                        approvalStepId: null,
+                        versionKey,
+                        versionType: "initial_draft",
+                        editorUser,
+                        originalFileName: fileName,
+                        versionFileName,
+                        versionFilePath: versionRelativePath,
+                        remark: "建立時初始草稿版本",
+                    }
+                );
+
+            await conn.commit();
+
+            return {
+                success: 1,
+                message: {
+                    ...result,
+                    versionKey,
+                    versionNo,
+                    versionFileName,
+                    versionFilePath: versionRelativePath,
+                },
+            };
+        } catch (e) {
+            if (conn) {
+                await conn.rollback();
+            }
+
+            console.error("createInitialAppraisalHistoryVersion error:", e);
+
+            return {
+                success: -1,
+                message: e.message || "建立初始歷史版本失敗",
+            };
+        } finally {
+            if (conn) {
+                conn.release();
             }
         }
-    }
+    };
 
     exportYearFinalOffice = async (req) => {
         console.log("exportOffice");
@@ -1793,13 +2581,22 @@ class OfficeService {
             deleteWorkbook.removeWorksheet("紀錄表");
             console.log(pathFileName);
             await deleteWorkbook.xlsx.writeFile(pathFileName);
-            await this.writeYearOfficeData(req, fileName, date);
-            // 保存資料到資料庫
+            const writeResult = await this.writeYearOfficeData(req, fileName, date);
+
+            const initialVersion = await this.createInitialYearAppraisalHistoryVersion({
+                excelId: writeResult.excelId,
+                fileName: writeResult.excelName,
+                currentFilePath: pathFileName,
+                req,
+            });
+
             return {
                 success: 1,
                 message: "製造成功",
-                excelName: fileName
-            }
+                excelId: writeResult.excelId,
+                excelName: writeResult.excelName,
+                initialVersion,
+            };
 
         } catch (e) {
             console.log(e);
@@ -1809,6 +2606,129 @@ class OfficeService {
             }
         }
     }
+
+    createInitialYearAppraisalHistoryVersion = async ({
+                                                          excelId,
+                                                          fileName,
+                                                          currentFilePath,
+                                                          req,
+                                                      }) => {
+        if (!excelId || !fileName) {
+            console.warn("createInitialYearAppraisalHistoryVersion 缺少 excelId 或 fileName");
+            return null;
+        }
+
+        if (!currentFilePath || !fs.existsSync(currentFilePath)) {
+            console.warn(
+                "createInitialYearAppraisalHistoryVersion 找不到正式檔：",
+                currentFilePath
+            );
+            return null;
+        }
+
+        const editorUser = {
+            USER_ID: req?.mydata?.USER_ID || null,
+            USER_NAME: req?.mydata?.USER_NAME || null,
+            MISS_NAME: req?.mydata?.MISS_NAME || null,
+            BRANCH_NAME: req?.mydata?.BRANCH_NAME || null,
+        };
+
+        const historyDirPath = path.resolve(
+            __dirname,
+            "../public",
+            "office",
+            "excel",
+            "history",
+            "EmployeeYearAppraisalExcelHistory"
+        );
+
+        const historyRelativeDir =
+            "office/excel/history/EmployeeYearAppraisalExcelHistory";
+
+        ensureDir(historyDirPath);
+
+        let conn = null;
+
+        try {
+            conn = await pool.getConnection();
+            await conn.beginTransaction();
+
+            const versionKey = buildInitialVersionKey({
+                editorUserId: editorUser.USER_ID,
+            });
+
+            const oldVersion = await OfficeFileVersionService.getExcelFileVersionByKey(
+                conn,
+                excelId,
+                versionKey
+            );
+
+            const versionNo =
+                oldVersion?.version_no ||
+                (await OfficeFileVersionService.getNextExcelFileVersionNo(
+                    conn,
+                    excelId
+                ));
+
+            const versionFileName =
+                oldVersion?.version_file_name ||
+                buildInitialVersionFileName({
+                    originalFileName: fileName,
+                    versionNo,
+                    editorUser,
+                });
+
+            const fullVersionFilePath = path.join(historyDirPath, versionFileName);
+            const versionRelativePath = `${historyRelativeDir}/${versionFileName}`;
+
+            fs.copyFileSync(currentFilePath, fullVersionFilePath);
+
+            const result =
+                await OfficeFileVersionService.createOrUpdateExcelFileVersionRecordWithConn(
+                    conn,
+                    {
+                        excelId,
+                        approvalId: null,
+                        approvalStepId: null,
+                        versionKey,
+                        versionType: "initial_draft",
+                        editorUser,
+                        originalFileName: fileName,
+                        versionFileName,
+                        versionFilePath: versionRelativePath,
+                        remark: "建立時初始草稿版本",
+                    }
+                );
+
+            await conn.commit();
+
+            return {
+                success: 1,
+                message: {
+                    ...result,
+                    versionKey,
+                    versionNo,
+                    versionFileName,
+                    versionFilePath: versionRelativePath,
+                },
+            };
+        } catch (e) {
+            if (conn) {
+                await conn.rollback();
+            }
+
+            console.error("createInitialYearAppraisalHistoryVersion error:", e);
+
+            return {
+                success: -1,
+                message: e.message || "建立年度考核初始歷史版本失敗",
+            };
+        } finally {
+            if (conn) {
+                conn.release();
+            }
+        }
+    };
 
     exportBonusOffice = async (req) => {
         let {USER_ID, BRANCH_NAME} = req.mydata;
@@ -1945,13 +2865,23 @@ class OfficeService {
             // 儲存修改
             await exceljsWorkbook.xlsx.writeFile(pathFileName);
 
-            // 儲存紀錄
-            await this.writeBonusData(req, fileName, date);
+            // ✅ 儲存主檔紀錄，取得 excelId
+            const writeResult = await this.writeBonusData(req, fileName, date);
+
+// ✅ 一建立就先建立一筆歷史版本
+            const initialVersion = await this.createInitialBonusHistoryVersion({
+                excelId: writeResult.excelId,
+                fileName: writeResult.excelName,
+                currentFilePath: pathFileName,
+                req,
+            });
 
             return {
                 success: 1,
                 message: "製造成功",
-                excelName: fileName
+                excelId: writeResult.excelId,
+                excelName: writeResult.excelName,
+                initialVersion,
             };
 
         } catch (e) {
