@@ -25,6 +25,14 @@ class ApprovalController {
         const result = await ApprovalService.returnApproval(req);
         res.json(result);
     }
+
+    /**
+     * 填報者抽單
+     */
+    async withdrawApproval(req, res, next) {
+        const result = await ApprovalService.withdrawApproval(req);
+        res.json(result);
+    }
 }
 
 module.exports = new ApprovalController();

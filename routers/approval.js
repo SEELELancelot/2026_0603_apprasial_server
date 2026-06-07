@@ -29,4 +29,7 @@ router.post("/approve", verifymyToken,ApprovalController.approveApproval);
 // 簽核退回
 router.post("/return", verifymyToken,ApprovalController.returnApproval);
 
+// 填報者抽單
+router.post("/withdraw", verifymyToken, ApprovalController.withdrawApproval);
+
 module.exports = router;

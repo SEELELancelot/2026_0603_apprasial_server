@@ -255,25 +255,98 @@ class OfficeService {
         }
     }
     getExcelNameByIdFetch = async (req) => {
-        const {documentId} = req.body;
-        const selectSql = `select excel_id, create_userId, excel_Name, excel_Send
-                           from appraisal_excel
-                           where excel_id = ?`;
+        const { documentId } = req.body;
+
+        /**
+         * ✅ 查詢 Excel 基本資料 + 最新簽核流程 + 目前待簽核關卡
+         *
+         * 實際資料表：
+         * - appraisal_excel
+         * - approval_instance
+         * - approval_instance_step
+         *
+         * 目的：
+         * 給前端 PreviewAppraisalBonusExcel 判斷：
+         * current_approver_user_id === login USER_ID
+         * 則 OnlyOffice 可以 edit。
+         */
+        const selectSql = `
+            SELECT
+                AE.excel_id,
+                AE.create_userId,
+                AE.create_userId AS create_user,
+                AE.excel_Name,
+                AE.excel_Send,
+                AE.type,
+
+                AI.approval_id,
+                AI.flow_type_key,
+                AI.business_table,
+                AI.business_id,
+                AI.status AS approval_status,
+
+                AIS.step_id AS current_step_id,
+                AIS.step_no AS current_step_no,
+                AIS.step_name AS current_step_name,
+
+                AIS.approver_user_id AS current_approver_user_id,
+                AIS.approver_name AS current_approver_name,
+                AIS.approver_miss_id AS current_approver_miss_id,
+                AIS.approver_miss_name AS current_approver_miss_name,
+                AIS.approver_branch_id AS current_approver_branch_id,
+                AIS.approver_branch_name AS current_approver_branch_name,
+                AIS.status AS current_step_status
+
+            FROM appraisal_excel AE
+
+                     LEFT JOIN (
+                SELECT
+                    approval_id,
+                    flow_type_key,
+                    business_table,
+                    business_id,
+                    status
+                FROM approval_instance
+                WHERE business_table = 'appraisal_excel'
+                  AND business_id = ?
+                ORDER BY approval_id DESC
+                    LIMIT 1
+            ) AI
+                               ON AI.business_table = 'appraisal_excel'
+                                   AND AI.business_id = AE.excel_id
+
+                     LEFT JOIN approval_instance_step AIS
+                               ON AIS.approval_id = AI.approval_id
+                                   AND AIS.status = 'pending'
+
+            WHERE AE.excel_id = ?
+
+                LIMIT 1
+        `;
 
         try {
-            const result = await pool.execute(selectSql, [documentId]);
+            const [rows] = await pool.execute(selectSql, [documentId, documentId]);
+
+            if (!rows || rows.length === 0) {
+                return {
+                    success: -1,
+                    message: "查無 Excel 資料",
+                };
+            }
+
             return {
                 success: 1,
-                message: result[0][0]
-            }
+                message: rows[0],
+            };
         } catch (e) {
             console.log(e);
+
             return {
                 success: -1,
-                message: "查詢失敗"
-            }
+                message: e.message || "查詢失敗",
+            };
         }
-    }
+    };
     getAppraisalTableFetch = async (req) => {
         const {USER_ID, admin_type} = req.mydata;
         let {year} = req.query;  // 前端傳來的年份

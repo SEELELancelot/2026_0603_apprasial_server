@@ -257,7 +257,7 @@ class ApprovalService {
     buildApplicantCurrentStep = (applicant) => {
         return {
             step_no: 0,
-            step_name: '申請者送出',
+            step_name: '填報者送出',
             approver_user_id: applicant.USER_ID,
             approver_name: applicant.USER_NAME,
             approver_miss_id: applicant.MISS_ID,
@@ -361,7 +361,7 @@ class ApprovalService {
 
         /**
          * ✅ 送出前 / 草稿 / 退回後重新送出預覽
-         * 目前關卡應該是申請者自己
+         * 目前關卡應該是填報者自己
          * 下一關才是第一個簽核關卡
          */
         if (status === 'draft' || status === 'returned') {
@@ -1080,6 +1080,166 @@ class ApprovalService {
             conn.release();
         }
     };
+
+
+    withdrawApproval = async (req) => {
+        const conn = await pool.getConnection();
+
+        try {
+            const { approvalId, opinion } = req.body;
+
+            if (!req.mydata?.USER_ID) {
+                throw new Error("找不到登入者資訊");
+            }
+
+            if (!approvalId) {
+                throw new Error("缺少 approvalId");
+            }
+
+            await conn.beginTransaction();
+
+            const loginUser = await this.getUserSnapshotByUserId(
+                conn,
+                req.mydata.USER_ID
+            );
+
+            if (!loginUser) {
+                throw new Error("找不到登入者資料");
+            }
+
+            const [instanceRows] = await conn.execute(
+                `
+                SELECT *
+                FROM approval_instance
+                WHERE approval_id = ?
+                LIMIT 1
+                `,
+                [approvalId]
+            );
+
+            if (instanceRows.length === 0) {
+                throw new Error("找不到簽核流程");
+            }
+
+            const instance = instanceRows[0];
+
+            if (instance.status === "approved") {
+                throw new Error("此文件已完成簽核，不能抽單");
+            }
+
+            if (instance.status === "withdrawn") {
+                throw new Error("此文件已抽單，不能重複抽單");
+            }
+
+            if (instance.status === "draft") {
+                throw new Error("此文件尚未送出，不需要抽單");
+            }
+
+            if (String(instance.applicant_user_id) !== String(req.mydata.USER_ID)) {
+                throw new Error("只有填報者本人可以抽單");
+            }
+
+            /**
+             * ✅ 取消尚未完成的關卡
+             *
+             * approved 的關卡保留，代表歷史已簽過。
+             * pending / waiting 改成 cancel。
+             */
+            await conn.execute(
+                `
+                UPDATE approval_instance_step
+                SET status = 'cancel',
+                    action = 'cancel',
+                    opinion = ?,
+                    action_time = NOW()
+                WHERE approval_id = ?
+                  AND status IN ('pending', 'waiting')
+                `,
+                [opinion || "填報者抽單", approvalId]
+            );
+
+            /**
+             * ✅ 主流程改為已抽單
+             */
+            await conn.execute(
+                `
+                UPDATE approval_instance
+                SET status = 'withdrawn',
+                    current_step_no = 0,
+                    update_time = NOW()
+                WHERE approval_id = ?
+                `,
+                [approvalId]
+            );
+
+            /**
+             * ✅ 寫入抽單紀錄
+             */
+            await conn.execute(
+                `
+                INSERT INTO approval_action_log (
+                    approval_id,
+                    action_user_id,
+                    action_user_name,
+                    action_miss_id,
+                    action_miss_name,
+                    action_branch_id,
+                    action_branch_name,
+                    action_type,
+                    opinion,
+                    from_step_no
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'withdraw', ?, ?)
+                `,
+                [
+                    approvalId,
+                    loginUser.USER_ID,
+                    loginUser.USER_NAME,
+                    loginUser.MISS_ID,
+                    loginUser.MISS_NAME,
+                    loginUser.BRANCH_ID,
+                    loginUser.BRANCH_NAME,
+                    opinion || "",
+                    instance.current_step_no || null,
+                ]
+            );
+
+            /**
+             * ✅ 原本 Excel 紀錄改回未送出
+             *
+             * 這樣前端 ApprovalRowPolicy.isNotSubmitted()
+             * 會判斷成未送出，可以重新送出、下載、預覽。
+             */
+            if (instance.business_table === "appraisal_excel") {
+                await conn.execute(
+                    `
+                    UPDATE appraisal_excel
+                    SET excel_Send = '0'
+                    WHERE excel_id = ?
+                    `,
+                    [instance.business_id]
+                );
+            }
+
+            await conn.commit();
+
+            return {
+                success: 1,
+                message: "已抽單",
+            };
+        } catch (e) {
+            await conn.rollback();
+            console.error("withdrawApproval error:", e);
+
+            return {
+                success: -1,
+                message: e.message || "抽單失敗",
+            };
+        } finally {
+            conn.release();
+        }
+    };
+
 }
 
 module.exports = new ApprovalService();

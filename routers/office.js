@@ -4,7 +4,7 @@ const {employeeAppraisalExcelMiddleware,getEmployeeManagerDataMiddleware}=requir
 const {exportExcel,AppraisalRecordExcel,getAppraisalTable,getExcelNameById,deleteExcelById,AppraisalYearRecordExcel,
     updateExcelSendById,checkAppraisalRecordError,mergeAppraisalExcel,exportYearFinalExcel,getYearAppraisalTableFetch,checkYearAppraisalRecordError,mergeYearAppraisalExcel,
     deleteYearExcelById,exportBonusExcel,AppraisalBonusExcelCallBack,getBonusTableFetch,deleteBonusById,mergeBonusExcel,exportBonusAutExcel,getAutBonusTableFetch,AppraisalAutExcelCallBack,
-    deleteAutBonusById,mergeAutBonusExcel
+    deleteAutBonusById,mergeAutBonusExcel,getExcelFileVersions,getExcelFileVersionById
 
 }=require("../controller/OfficeController");
 const officeRouter = express.Router();
@@ -41,5 +41,7 @@ officeRouter.post("/checkYearAppraisalRecordError",getEmployeeManagerDataMiddlew
 
 officeRouter.post("/exportBonusExcel",verifymyToken,employeeAppraisalExcelMiddleware,exportBonusExcel); //端午
 officeRouter.post("/exportBonusAutExcel",verifymyToken,employeeAppraisalExcelMiddleware,exportBonusAutExcel);
+officeRouter.post("/getExcelFileVersions", verifymyToken, getExcelFileVersions);
+officeRouter.post("/getExcelFileVersionById", verifymyToken, getExcelFileVersionById);
 
 module.exports = officeRouter;
