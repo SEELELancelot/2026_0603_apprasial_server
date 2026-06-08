@@ -1,6 +1,7 @@
 const express = require("express");
 const {verifymyToken} = require("../middleware/authmiddleware");
 const {employeeAppraisalExcelMiddleware,getEmployeeManagerDataMiddleware}=require("../middleware/userMiddleware");
+const {fetchBonusEelZongSalesMiddleware}=require("../middleware/fetchBonusEelZongSalesMiddleware");
 const {exportExcel,AppraisalRecordExcel,getAppraisalTable,getExcelNameById,deleteExcelById,AppraisalYearRecordExcel,
     updateExcelSendById,checkAppraisalRecordError,mergeAppraisalExcel,exportYearFinalExcel,getYearAppraisalTableFetch,checkYearAppraisalRecordError,mergeYearAppraisalExcel,
     deleteYearExcelById,exportBonusExcel,AppraisalBonusExcelCallBack,getBonusTableFetch,deleteBonusById,mergeBonusExcel,exportBonusAutExcel,getAutBonusTableFetch,AppraisalAutExcelCallBack,
@@ -39,7 +40,7 @@ officeRouter.get("/getBonusAutTableFetch",verifymyToken,getAutBonusTableFetch) ;
 officeRouter.post("/exportYearFinalExcel",verifymyToken,employeeAppraisalExcelMiddleware,exportYearFinalExcel);  //新建年終考核
 officeRouter.post("/checkYearAppraisalRecordError",getEmployeeManagerDataMiddleware,checkYearAppraisalRecordError);
 
-officeRouter.post("/exportBonusExcel",verifymyToken,employeeAppraisalExcelMiddleware,exportBonusExcel); //端午
+officeRouter.post("/exportBonusExcel",verifymyToken,employeeAppraisalExcelMiddleware,fetchBonusEelZongSalesMiddleware,exportBonusExcel); //端午
 officeRouter.post("/exportBonusAutExcel",verifymyToken,employeeAppraisalExcelMiddleware,exportBonusAutExcel);
 officeRouter.post("/getExcelFileVersions", verifymyToken, getExcelFileVersions);
 officeRouter.post("/getExcelFileVersionById", verifymyToken, getExcelFileVersionById);

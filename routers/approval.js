@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-const ApprovalController = require("../Controller/ApprovalController");
+const ApprovalController = require("../controller/ApprovalController");
 const {verifymyToken} = require("../middleware/authmiddleware");
 
 /**

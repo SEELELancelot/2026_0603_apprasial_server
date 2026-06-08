@@ -2731,131 +2731,315 @@ class OfficeService {
     };
 
     exportBonusOffice = async (req) => {
-        let {USER_ID, BRANCH_NAME} = req.mydata;
-        const getExcelManagerEmployeeData = JSON.parse(req?.getExcelManagerEmployeeData);
+        let { USER_ID, BRANCH_NAME } = req.mydata;
+        const getExcelManagerEmployeeData = JSON.parse(req?.getExcelManagerEmployeeData || "[]");
+
         if (USER_ID === "0035") {
             BRANCH_NAME = "金融部門";
         } else if (USER_ID === "0014") {
             BRANCH_NAME = "總幹事室、經濟、服務部門";
         }
 
+        /**
+         * ✅ 西元日期轉民國日期
+         * 2026-05-04 00:00:00 -> 115/05/04
+         */
+        const formatToTwDate = (dateTimeText) => {
+            if (!dateTimeText) return "";
+
+            const dateText = String(dateTimeText).split(" ")[0];
+            const [yyyy, mm, dd] = dateText.split("-");
+
+            if (!yyyy || !mm || !dd) return "";
+
+            const twYear = Number(yyyy) - 1911;
+            return `${twYear}/${mm}/${dd}`;
+        };
+
+        /**
+         * ✅ 統一設定邊框
+         */
+        const thinBorder = {
+            top: { style: "thin" },
+            bottom: { style: "thin" },
+            left: { style: "thin" },
+            right: { style: "thin" },
+        };
+
         try {
             // === 步驟 1：先用 XlsxPopulate 複製範本 ===
             const workbook = await XlsxPopulate.fromFileAsync(
-                path.resolve(__dirname, "../public", "office", "excel", "EmployeeAppraisalExcelTemplate", "端午發放獎金調查範本.xlsx")
+                path.resolve(
+                    __dirname,
+                    "../public",
+                    "office",
+                    "excel",
+                    "EmployeeAppraisalExcelTemplate",
+                    "端午發放獎金調查範本.xlsx"
+                )
             );
+
             const templateWorkbook = workbook.sheet("紀錄表");
 
             const date = new Date();
-            const currentDateTime = moment(date).format('YYYY-MM-DD HH-mm-ss');
+            const currentDateTime = moment(date).format("YYYY-MM-DD HH-mm-ss");
             const fileName = `(${BRANCH_NAME}) 端午發放獎金調查紀錄表 (${currentDateTime}).xlsx`;
-            const pathFileName = path.resolve(__dirname, "../public", "office", "excel", "EmployeeBonusExcel", fileName);
 
-            await workbook.toFileAsync(pathFileName); // 先輸出原始 Excel
+            const pathFileName = path.resolve(
+                __dirname,
+                "../public",
+                "office",
+                "excel",
+                "EmployeeBonusExcel",
+                fileName
+            );
 
-            // === 步驟 2：再用 exceljs 寫入 BCD 合併欄位 ===
+            await workbook.toFileAsync(pathFileName);
+
+            // === 步驟 2：再用 exceljs 寫入資料 ===
             const exceljsWorkbook = new ExcelJS.Workbook();
             await exceljsWorkbook.xlsx.readFile(pathFileName);
 
             const worksheet = exceljsWorkbook.getWorksheet("紀錄表");
 
-            // 目標：將 B1 合併，並寫入「單位：xxx」
-            const cell = worksheet.getCell('B2');
+            // 目標：將 B2 寫入「單位：xxx」
+            const cell = worksheet.getCell("B2");
             cell.value = `單位:${BRANCH_NAME}`;
             cell.font = {
-                name: '標楷體',
+                name: "標楷體",
                 size: 14,
-                bold: false
+                bold: false,
             };
             cell.alignment = {
-                vertical: 'top',
-                horizontal: 'center'
+                vertical: "top",
+                horizontal: "center",
             };
 
-            // 4. 從 A4 開始寫入員工資料
+            /**
+             * ✅ 新增 L 欄鰻意粽銷售欄位
+             *
+             * K 欄：留空當間隙
+             * L 欄：實際銷售
+             * M 欄：留空當間隙
+             * O:R：公式提示區
+             */
+            const startText = formatToTwDate(req?.bonusEelZongSalesInfo?.startDateTime);
+            const endText = formatToTwDate(req?.bonusEelZongSalesInfo?.endDateTime);
+
+            // ✅ K 欄當作 J 和 L 之間的間隙
+            worksheet.getColumn("K").width = 4;
+
+            // ✅ L 欄：實際銷售，加寬一點
+            worksheet.getColumn("L").width = 22;
+
+            // ✅ M 欄當作 L 和 O 之間的間隙
+            worksheet.getColumn("M").width = 4;
+
+            // ✅ N 欄也保留空白，避免提示區太靠近
+            worksheet.getColumn("N").width = 4;
+
+            // ✅ 第一列高度加高，讓換行後的標題完整顯示
+            worksheet.getRow(1).height = 52;
+
+            // ✅ L1 標題
+            const eelTitleCell = worksheet.getCell("L1");
+            eelTitleCell.value = `鰻意粽銷售\n(${startText} - ${endText})`;
+            eelTitleCell.font = {
+                name: "標楷體",
+                size: 12,
+                bold: true,
+            };
+            eelTitleCell.alignment = {
+                vertical: "middle",
+                horizontal: "center",
+                wrapText: true,
+            };
+            eelTitleCell.border = thinBorder;
+
+            // ✅ L2 表頭：實際銷售
+            const eelHeaderCell = worksheet.getCell("L2");
+            eelHeaderCell.value = "實際銷售";
+            eelHeaderCell.font = {
+                name: "標楷體",
+                size: 12,
+                bold: true,
+            };
+            eelHeaderCell.alignment = {
+                vertical: "middle",
+                horizontal: "center",
+            };
+            eelHeaderCell.border = thinBorder;
+
+            /**
+             * ✅ 補 L3:L4 空白區塊邊框
+             */
+            ["L3", "L4"].forEach((cellAddress) => {
+                const emptyCell = worksheet.getCell(cellAddress);
+                emptyCell.value = "";
+                emptyCell.font = {
+                    name: "標楷體",
+                    size: 12,
+                };
+                emptyCell.alignment = {
+                    vertical: "middle",
+                    horizontal: "center",
+                };
+                emptyCell.border = thinBorder;
+            });
+
+            // 4. 從 A5 開始寫入員工資料
             const startRow = 5;
+
             getExcelManagerEmployeeData.forEach((emp, i) => {
                 const rowNumber = startRow + i;
                 const row = worksheet.getRow(rowNumber);
                 row.height = 30;
+
                 // A 欄：姓名
                 const nameCell = worksheet.getCell(`A${rowNumber}`);
                 nameCell.value = emp.label;
+
                 // B~D 欄合併 → 職稱
                 worksheet.mergeCells(`B${rowNumber}:D${rowNumber}`);
                 const titleCell = worksheet.getCell(`B${rowNumber}`);
                 titleCell.value = emp.MISS_NAME;
-                // E~F、G~H、I~J：都合併（先做）
 
+                // E~F、G~H、I~J：都合併
                 worksheet.mergeCells(`E${rowNumber}:F${rowNumber}`);
                 worksheet.mergeCells(`G${rowNumber}:H${rowNumber}`);
                 worksheet.mergeCells(`I${rowNumber}:J${rowNumber}`);
+
                 // ✅ 加入 E、G、I 欄下拉選單（✔ / 空白）
-                ['E', 'G', 'I'].forEach(col => {
+                ["E", "G", "I"].forEach((col) => {
                     const cell = worksheet.getCell(`${col}${rowNumber}`);
                     cell.dataValidation = {
-                        type: 'list',
+                        type: "list",
                         allowBlank: true,
-                        formulae: ['"✔,"'], // ✔ 或空白
+                        formulae: ['"✔,"'],
                         showDropDown: true,
                         showErrorMessage: true,
-                        errorTitle: '輸入錯誤',
-                        error: '請從選單中選擇 ✔ 或留空'
+                        errorTitle: "輸入錯誤",
+                        error: "請從選單中選擇 ✔ 或留空",
                     };
                 });
 
                 // 設定 A～J 欄格式（統一置中 + 字型 + 邊框）
                 for (let col = 1; col <= 10; col++) {
                     const cell = worksheet.getRow(rowNumber).getCell(col);
-                    cell.font = {name: '標楷體', size: 12};
-                    cell.alignment = {vertical: 'middle', horizontal: 'center'};
-                    cell.border = {
-                        top: {style: 'thin'},
-                        bottom: {style: 'thin'},
-                        left: {style: 'thin'},
-                        right: {style: 'thin'}
+                    cell.font = {
+                        name: "標楷體",
+                        size: 12,
                     };
+                    cell.alignment = {
+                        vertical: "middle",
+                        horizontal: "center",
+                    };
+                    cell.border = thinBorder;
                 }
 
-                // P:T 合併 + 顯示驗證結果
-                worksheet.mergeCells(`N${rowNumber}:Q${rowNumber}`);
-                const formulaCell = worksheet.getCell(`P${rowNumber}`);
-                formulaCell.font = {
-                    name: '標楷體',
+                /**
+                 * ✅ L 欄寫入鰻意粽資料
+                 *
+                 * L：實際銷售
+                 * 顯示格式：4盒、8盒
+                 */
+                const actualSalesCell = worksheet.getCell(`L${rowNumber}`);
+                actualSalesCell.value = Number(emp.eel_zong_net_qty) || 0;
+                actualSalesCell.numFmt = '#,##0"盒"';
+                actualSalesCell.font = {
+                    name: "標楷體",
                     size: 12,
-                    color: {argb: 'FFFF0000'}  // 紅色
                 };
-                formulaCell.alignment = {vertical: 'middle', horizontal: 'center'};
+                actualSalesCell.alignment = {
+                    vertical: "middle",
+                    horizontal: "center",
+                };
+                actualSalesCell.border = thinBorder;
 
-                // ✅ 加入公式：如果 ✔ 數不是 1，顯示錯誤文字
+                /**
+                 * ✅ O:R 公式提示區
+                 *
+                 * 0 個 ✔：請於本列擇一打 ✔，黑色
+                 * 1 個 ✔：空白
+                 * 2 個以上 ✔：請選擇唯一一項建議發放月份，紅色
+                 */
+                worksheet.mergeCells(`O${rowNumber}:R${rowNumber}`);
+                const formulaCell = worksheet.getCell(`O${rowNumber}`);
+
+                // ✅ 預設黑色：給「請於本列擇一打 ✔」
+                formulaCell.font = {
+                    name: "標楷體",
+                    size: 12,
+                    color: { argb: "FF000000" },
+                };
+
+                formulaCell.alignment = {
+                    vertical: "middle",
+                    horizontal: "center",
+                };
+
                 formulaCell.value = {
-                    formula: `IF((E${rowNumber}="✔")+(G${rowNumber}="✔")+(I${rowNumber}="✔")<>1,"請選擇唯一一項建議發放月份","")`,
-                    result: ""
+                    formula: `IF((E${rowNumber}="✔")+(G${rowNumber}="✔")+(I${rowNumber}="✔")=0,"請於本列擇一打 ✔",IF((E${rowNumber}="✔")+(G${rowNumber}="✔")+(I${rowNumber}="✔")>1,"請選擇唯一一項建議發放月份",""))`,
+                    result: "請於本列擇一打 ✔",
                 };
 
-                worksheet.protect('yourPassword', {
-                    selectLockedCells: false,
-                    selectUnlockedCells: true
-                });
-                // ❗️將其它欄位解除鎖定（預設都是 locked）
-                ['E', 'G', 'I'].forEach(col => {
-                    const cell = worksheet.getCell(`${col}${rowNumber}`);
-                    cell.protection = {locked: false};
+                /**
+                 * ✅ 條件式格式：
+                 * 只有 2 個以上 ✔ 時，O:R 文字變紅色
+                 */
+                worksheet.addConditionalFormatting({
+                    ref: `O${rowNumber}:R${rowNumber}`,
+                    rules: [
+                        {
+                            type: "expression",
+                            formulae: [
+                                `(E${rowNumber}="✔")+(G${rowNumber}="✔")+(I${rowNumber}="✔")>1`,
+                            ],
+                            style: {
+                                font: {
+                                    color: { argb: "FFFF0000" },
+                                },
+                            },
+                        },
+                    ],
                 });
 
+                worksheet.protect(EXCEL_PASSWORD, {
+                    selectLockedCells: false,
+                    selectUnlockedCells: true,
+                });
+
+                // ❗️將其它欄位解除鎖定（預設都是 locked）
+                ["E", "G", "I"].forEach((col) => {
+                    const cell = worksheet.getCell(`${col}${rowNumber}`);
+                    cell.protection = {
+                        locked: false,
+                    };
+                });
             });
 
-            // 新增工作表
-            const newSheetName = "參數"; // 新的工作表名稱
+            /**
+             * ✅ 不產生合計列
+             *
+             * 原本這裡會產生：
+             * totalRowNumber = startRow + getExcelManagerEmployeeData.length
+             * 並在 L 欄顯示 12盒
+             *
+             * 現在已移除，所以不會出現最下方合計。
+             */
+
+                // 新增工作表
+            const newSheetName = "參數";
             const newSheet = exceljsWorkbook.addWorksheet(newSheetName);
 
             for (let i = 0; i < getExcelManagerEmployeeData.length; i++) {
-                const {value, label, BRANCH_NAME} = getExcelManagerEmployeeData[i];
-                newSheet.addRow([value, label, BRANCH_NAME]); //
+                const { value, label, BRANCH_NAME } = getExcelManagerEmployeeData[i];
+                newSheet.addRow([value, label, BRANCH_NAME]);
             }
 
             // 隱藏工作表
             newSheet.state = "hidden";
+
             // 設置密碼保護
             await newSheet.protect(EXCEL_PASSWORD, {
                 selectLockedCells: false,
@@ -2868,7 +3052,7 @@ class OfficeService {
             // ✅ 儲存主檔紀錄，取得 excelId
             const writeResult = await this.writeBonusData(req, fileName, date);
 
-// ✅ 一建立就先建立一筆歷史版本
+            // ✅ 一建立就先建立一筆歷史版本
             const initialVersion = await this.createInitialBonusHistoryVersion({
                 excelId: writeResult.excelId,
                 fileName: writeResult.excelName,
@@ -2888,7 +3072,7 @@ class OfficeService {
             console.error(e);
             return {
                 success: -1,
-                message: "製造Excel發生錯誤"
+                message: "製造Excel發生錯誤",
             };
         }
     };
