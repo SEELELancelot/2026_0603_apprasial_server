@@ -434,22 +434,47 @@ class ApprovalService {
                 throw new Error("缺少必要參數");
             }
 
+            /**
+             * ✅ 取得填報者 / 文件建立者資料
+             */
             const applicant = await this.getApplicantByBusiness(
                 conn,
                 businessTable,
                 businessId
             );
 
+            /**
+             * ✅ 查詢此文件是否已有簽核流程
+             */
             const exists = await this.getInstanceByBusiness(
                 conn,
                 businessTable,
                 businessId
             );
 
-            // 已經有簽核資料，直接回傳 detail
-            if (exists && exists.status !== "returned") {
-                const steps = await this.getStepsByApprovalId(conn, exists.approval_id);
-                const logs = await this.getLogsByApprovalId(conn, exists.approval_id);
+            /**
+             * ✅ 已經有簽核資料時，只有「正常進行中 / 已完成」才直接回傳 detail
+             *
+             * 注意：
+             * - returned：退回後要重新預覽流程
+             * - withdrawn：抽單後原流程作廢，也要重新預覽流程
+             */
+            const existsStatus = String(exists?.status || "");
+
+            const shouldUseExistsDetail =
+                exists &&
+                !["returned", "withdrawn"].includes(existsStatus);
+
+            if (shouldUseExistsDetail) {
+                const steps = await this.getStepsByApprovalId(
+                    conn,
+                    exists.approval_id
+                );
+
+                const logs = await this.getLogsByApprovalId(
+                    conn,
+                    exists.approval_id
+                );
 
                 const message = await this.buildApprovalInfo(
                     conn,
@@ -465,24 +490,41 @@ class ApprovalService {
                 };
             }
 
-            // 沒有簽核或已退回，重新預覽流程
+            /**
+             * ✅ 沒有簽核 / 已退回 / 已抽單：
+             * 重新建立「送出前預覽流程」
+             */
             const builtSteps = await this.buildApprovalSteps(conn, applicant);
             const steps = this.formatPreviewSteps(builtSteps);
 
+            /**
+             * ✅ 預覽用 instance
+             *
+             * 重點：
+             * - status 一律給 draft
+             * - current_step_no = 0
+             * - 代表目前還在填報者手上
+             *
+             * 不要再用 exists?.status，
+             * 因為 withdrawn 會讓畫面顯示成已抽單流程，而不是重新送出流程。
+             */
             const instance = {
                 approval_id: exists?.approval_id || null,
                 flow_type_key: flowTypeKey,
                 business_table: businessTable,
                 business_id: businessId,
-
-                // ✅ 預覽時還沒有送出，所以是 draft
-                status: exists?.status || 'draft',
-
-                // ✅ 目前在申請者手上，不是第 1 關
+                status: "draft",
                 current_step_no: 0,
             };
 
-            const logs = exists
+            /**
+             * ✅ 如果之前有流程，保留 logs
+             * 例如：
+             * - 送出紀錄
+             * - 抽單紀錄
+             * - 退回紀錄
+             */
+            const logs = exists?.approval_id
                 ? await this.getLogsByApprovalId(conn, exists.approval_id)
                 : [];
 
@@ -494,12 +536,66 @@ class ApprovalService {
                 logs
             );
 
+            /**
+             * ✅ 關鍵修正：
+             * buildApprovalInfo 通常會用 current_step_no 去 steps 找目前關卡。
+             * 但預覽時 current_step_no = 0，
+             * 而 steps 通常從 1 開始，所以會找不到目前位置。
+             *
+             * 所以這裡手動補「目前位置」。
+             */
+            message.currentStep = {
+                step_no: 0,
+                step_name: "填報者",
+                approver_user_id:
+                    applicant?.USER_ID ||
+                    applicant?.user_id ||
+                    applicant?.create_userId ||
+                    applicant?.create_user ||
+                    null,
+                approver_name:
+                    applicant?.USER_NAME ||
+                    applicant?.user_name ||
+                    applicant?.applicant_name ||
+                    "-",
+                approver_miss_name:
+                    applicant?.MISS_NAME ||
+                    applicant?.miss_name ||
+                    applicant?.applicant_miss_name ||
+                    "-",
+                approver_branch_name:
+                    applicant?.BRANCH_NAME ||
+                    applicant?.branch_name ||
+                    applicant?.applicant_branch_name ||
+                    "-",
+                status: "draft",
+            };
+
+            /**
+             * ✅ 第一關卡
+             *
+             * formatPreviewSteps(builtSteps) 產生的 steps[0]
+             * 就是送出後要抵達的第一關。
+             */
+            message.nextStep = steps?.[0] || null;
+
+            /**
+             * ✅ 確保 steps 有資料
+             *
+             * 如果 buildApprovalInfo 沒有把 steps 放回 message，
+             * 這裡補回去。
+             */
+            message.steps = Array.isArray(message.steps) && message.steps.length > 0
+                ? message.steps
+                : steps;
+
             return {
                 success: 1,
                 message,
             };
         } catch (e) {
             console.error("previewSubmit error:", e);
+
             return {
                 success: -1,
                 message: e.message || "取得簽核流程失敗",

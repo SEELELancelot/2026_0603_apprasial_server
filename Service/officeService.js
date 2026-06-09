@@ -1067,11 +1067,19 @@ class OfficeService {
             /**
              * type = 3 端午
              *
-             * 重點：
-             * 1. 一定要 LEFT JOIN approval_instance
-             * 2. 一定要 LEFT JOIN approval_instance_step
-             * 3. 要回傳 approval_status、current_approver_user_id
-             * 4. 抽單 withdrawn 不 join，讓它回到未送出
+             * 排序邏輯：
+             * 1. 自己建立且未送出
+             * 2. 已到達自己的流程，也就是待我簽核
+             * 3. 簽核中，但還沒到自己
+             * 4. 已完成
+             * 5. 已退回
+             * 6. 其他
+             *
+             * 時間排序：
+             * - 自己未送出：AE.create_time
+             * - 待我簽核：目前關卡時間 S.update_time / S.create_time
+             * - 簽核中：目前關卡時間 S.update_time / S.create_time
+             * - 已完成 / 已退回：流程主檔異動時間 A.update_time
              */
             const baseSelect = `
                 SELECT
@@ -1089,11 +1097,84 @@ class OfficeService {
                     A.applicant_user_id AS applicant_user_id,
                     A.status AS approval_status,
                     A.current_step_no AS current_step_no,
+                    A.create_time AS approval_create_time,
+                    A.update_time AS approval_update_time,
 
                     S.step_name AS current_step_name,
                     S.approver_user_id AS current_approver_user_id,
                     S.approver_name AS current_approver_name,
-                    S.status AS current_step_status
+                    S.status AS current_step_status,
+                    S.create_time AS current_step_create_time,
+                    S.update_time AS current_step_update_time,
+
+                    CASE
+                        WHEN A.approval_id IS NULL
+                            AND AE.create_userId = ? THEN 1
+
+                        WHEN A.status = 'pending'
+                            AND S.approver_user_id = ? THEN 2
+
+                        WHEN A.status = 'pending' THEN 3
+
+                        WHEN A.status = 'completed' THEN 4
+
+                        WHEN A.status = 'returned' THEN 5
+
+                        WHEN A.approval_id IS NULL THEN 6
+
+                        ELSE 9
+                        END AS sort_group,
+
+                    CASE
+                        WHEN A.approval_id IS NULL
+                            AND AE.create_userId = ? THEN
+                            AE.create_time
+
+                        WHEN A.status = 'pending'
+                            AND S.approver_user_id = ? THEN
+                            COALESCE(
+                                    S.update_time,
+                                    S.create_time,
+                                    A.update_time,
+                                    A.create_time,
+                                    AE.create_time
+                            )
+
+                        WHEN A.status = 'pending' THEN
+                            COALESCE(
+                                    S.update_time,
+                                    S.create_time,
+                                    A.update_time,
+                                    A.create_time,
+                                    AE.create_time
+                            )
+
+                        WHEN A.status = 'completed' THEN
+                            COALESCE(
+                                    A.update_time,
+                                    A.create_time,
+                                    AE.create_time
+                            )
+
+                        WHEN A.status = 'returned' THEN
+                            COALESCE(
+                                    A.update_time,
+                                    A.create_time,
+                                    AE.create_time
+                            )
+
+                        WHEN A.approval_id IS NULL THEN
+                            AE.create_time
+
+                        ELSE
+                            COALESCE(
+                                    A.update_time,
+                                    S.update_time,
+                                    A.create_time,
+                                    S.create_time,
+                                    AE.create_time
+                            )
+                        END AS sort_time
 
                 FROM appraisal_excel AE
 
@@ -1130,10 +1211,18 @@ class OfficeService {
                         )
                   )
                   ${yearCondition}
-                ORDER BY AE.create_time DESC
+                ORDER BY
+                    sort_group ASC,
+                    sort_time DESC,
+                    AE.create_time DESC
             `;
 
                 params = [
+                    USER_ID, // sort_group：自己未送出
+                    USER_ID, // sort_group：待我簽核
+                    USER_ID, // sort_time：自己未送出
+                    USER_ID, // sort_time：待我簽核
+
                     '3',
                     USER_ID,
                     USER_ID,
@@ -1148,8 +1237,6 @@ class OfficeService {
              * 1. 已送出的文件
              * 2. 自己建立的文件
              * 3. 別人送給自己簽核的文件
-             *
-             * 這樣郭秘書 / 總幹事才會看到別人送來的。
              */
             else if (admin_type === '1') {
                 sql = `
@@ -1164,19 +1251,36 @@ class OfficeService {
                         )
                   )
                   ${yearCondition}
-                ORDER BY AE.create_time DESC
+                ORDER BY
+                    sort_group ASC,
+                    sort_time DESC,
+                    AE.create_time DESC
             `;
 
                 params = [
+                    USER_ID, // sort_group：自己未送出
+                    USER_ID, // sort_group：待我簽核
+                    USER_ID, // sort_time：自己未送出
+                    USER_ID, // sort_time：待我簽核
+
                     '3',
                     USER_ID,
                     USER_ID,
                     ...yearParams,
                 ];
+            } else {
+                return {
+                    success: 1,
+                    message: [],
+                };
             }
 
             /**
              * ✅ 可選：只看待我簽核
+             *
+             * 注意：
+             * pendingMine 模式下，只會顯示已到自己關卡的資料，
+             * 不會顯示自己未送出的資料。
              */
             if (statusMode === 'pendingMine') {
                 sql = `
@@ -1185,10 +1289,18 @@ class OfficeService {
                   AND A.status = 'pending'
                   AND S.approver_user_id = ?
                   ${yearCondition}
-                ORDER BY AE.create_time DESC
+                ORDER BY
+                    sort_group ASC,
+                    sort_time DESC,
+                    AE.create_time DESC
             `;
 
                 params = [
+                    USER_ID, // sort_group：自己未送出
+                    USER_ID, // sort_group：待我簽核
+                    USER_ID, // sort_time：自己未送出
+                    USER_ID, // sort_time：待我簽核
+
                     '3',
                     USER_ID,
                     ...yearParams,
