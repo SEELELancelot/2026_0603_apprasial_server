@@ -420,7 +420,6 @@ class ApprovalService {
             logs,
         };
     };
-
     /**
      * 送出前預覽
      */
