@@ -2090,6 +2090,7 @@ class OfficeService {
                             }
                         });
                     }
+
                     allEmployeeData.push({
                         row: currentRow,
                         name,
