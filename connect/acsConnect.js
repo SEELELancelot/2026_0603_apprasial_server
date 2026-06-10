@@ -4,8 +4,8 @@ const AcsPool = mysql.createPool({
     host: "192.168.0.180",
     database: "acsdb",
     user: 'apuser',
-    password: "apuser",
-    port: 3309,
+    password: "apuserxxxxxxxx",
+    port: 'xxxx',
     multipleStatements: true,
     charset: "utf8",
     // ✅ 加入以下兩行

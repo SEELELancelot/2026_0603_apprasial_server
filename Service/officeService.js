@@ -1964,50 +1964,132 @@ class OfficeService {
     }
 
     mergeBonusExcelAction = async (req) => {
-        const {excelArray} = req?.body;
+        const { excelArray } = req?.body;
+
         let allEmployeeData = [];
         const startEmployeeRow = 5;
 
+        /**
+         * ✅ ExcelJS cell value 轉成字串
+         * 支援：
+         * - 一般文字
+         * - 數字
+         * - formula
+         * - richText
+         */
+        const getCellText = (cell) => {
+            if (!cell) return "";
+
+            const value = cell.value;
+
+            if (value === null || value === undefined) return "";
+
+            // 公式儲存格
+            if (typeof value === "object" && value.formula !== undefined) {
+                return value.result !== undefined && value.result !== null
+                    ? String(value.result).trim()
+                    : "";
+            }
+
+            // richText
+            if (typeof value === "object" && Array.isArray(value.richText)) {
+                return value.richText
+                    .map(item => item.text || "")
+                    .join("")
+                    .trim();
+            }
+
+            // 日期
+            if (value instanceof Date) {
+                return moment(value).format("YYYY-MM-DD");
+            }
+
+            return String(value).trim();
+        };
+
         try {
-            const totalWorkBook = await XlsxPopulate.fromFileAsync(path.resolve(__dirname, "../public", "office", "excel", "EmployeeAppraisalExcelTemplate", "端午發放獎金總表範本.xlsx"));
+            const totalWorkBook = await XlsxPopulate.fromFileAsync(
+                path.resolve(
+                    __dirname,
+                    "../public",
+                    "office",
+                    "excel",
+                    "EmployeeAppraisalExcelTemplate",
+                    "端午發放獎金總表範本.xlsx"
+                )
+            );
+
             for (let i = 0; i < excelArray.length; i++) {
                 const workbook = new ExcelJS.Workbook();
-                await workbook.xlsx.readFile(path.resolve(__dirname, "../public", "office", "excel", "EmployeeBonusExcel", excelArray[i]?.excel_Name));
+
+                await workbook.xlsx.readFile(
+                    path.resolve(
+                        __dirname,
+                        "../public",
+                        "office",
+                        "excel",
+                        "EmployeeBonusExcel",
+                        excelArray[i]?.excel_Name
+                    )
+                );
 
                 const sheetRecord = workbook.worksheets[0];
                 const sheetParam = workbook.getWorksheet("參數");
 
                 let currentRow = startEmployeeRow;
 
-                // 1️⃣ 循環紀錄表的 A 欄
                 while (true) {
                     const nameCell = sheetRecord.getCell(`A${currentRow}`);
                     const missNameCell = sheetRecord.getCell(`B${currentRow}`);
+
+                    /**
+                     * ✅ 來源紀錄表欄位
+                     *
+                     * A：姓名
+                     * B：職稱
+                     * E：0 月
+                     * G：0.5 月
+                     * I：1 月
+                     * L：實際銷售
+                     */
                     const zeroMonthCell = sheetRecord.getCell(`E${currentRow}`);
                     const pointFiveMonthCell = sheetRecord.getCell(`G${currentRow}`);
                     const oneMonthCell = sheetRecord.getCell(`I${currentRow}`);
+                    const actualSalesCell = sheetRecord.getCell(`L${currentRow}`);
 
-                    const name = nameCell.value?.toString().trim();
-                    const missName = missNameCell.value?.toString().trim();
-                    const zeroMonthValue = zeroMonthCell.value?.toString().trim();
-                    const pointFiveMonthValue = pointFiveMonthCell.value?.toString().trim();
-                    const oneMonthValue = oneMonthCell.value?.toString().trim()
+                    const name = getCellText(nameCell);
+                    const missName = getCellText(missNameCell);
+                    const zeroMonthValue = getCellText(zeroMonthCell);
+                    const pointFiveMonthValue = getCellText(pointFiveMonthCell);
+                    const oneMonthValue = getCellText(oneMonthCell);
+
+                    // ✅ 新增：取得 L 欄實際銷售
+                    const actualSalesValue = getCellText(actualSalesCell);
 
                     if (!name) break;
 
-                    // 2️⃣ 在參數表中找該姓名對應資料（在 B 欄）
+                    /**
+                     * ✅ 在參數表中找該姓名對應資料
+                     * A：員工編號
+                     * B：姓名
+                     * C：單位
+                     */
                     let matchedParam = null;
-                    sheetParam.eachRow((row, rowNumber) => {
-                        const paramName = row.getCell('B').value?.toString().trim();
-                        if (paramName === name) {
-                            matchedParam = {
-                                row: rowNumber,
-                                userId: row.getCell('A').value?.toString().trim(),     // 員工編號
-                                name: paramName,
-                                department: row.getCell('C').value?.toString().trim()  // 單位
-                            };
-                        }
-                    });
+
+                    if (sheetParam) {
+                        sheetParam.eachRow((row, rowNumber) => {
+                            const paramName = getCellText(row.getCell("B"));
+
+                            if (paramName === name) {
+                                matchedParam = {
+                                    row: rowNumber,
+                                    userId: getCellText(row.getCell("A")),
+                                    name: paramName,
+                                    department: getCellText(row.getCell("C")),
+                                };
+                            }
+                        });
+                    }
                     allEmployeeData.push({
                         row: currentRow,
                         name,
@@ -2015,95 +2097,199 @@ class OfficeService {
                         zeroMonthValue,
                         pointFiveMonthValue,
                         oneMonthValue,
-                        matchedParam
+
+                        // ✅ 新增
+                        actualSalesValue,
+
+                        matchedParam,
+                        sourceExcelName: excelArray[i]?.excel_Name,
                     });
+
                     currentRow++;
                 }
             }
-            console.log(allEmployeeData);
 
-            let templateRange = totalWorkBook.sheet(0).cell("A2");
+            console.log("合併資料 =", allEmployeeData);
+
+            const sheet = totalWorkBook.sheet(0);
+
+            /**
+             * ✅ 取範本第 2 列樣式
+             */
+            let templateRange = sheet.cell("A2");
+
             let templateStyles = templateRange.style([
-                'bold',
-                'italic',
-                'underline',
-                'strikethrough',
-                'fontSize',
-                'fontFamily',
-                'fontColor',
-                'horizontalAlignment',
-                'verticalAlignment',
-                'wrapText',
-                'shrinkToFit',
-                'textDirection',
-                'textRotation',
-                'verticalText',
-                'fill',
-                'border',
-                'numberFormat',
+                "bold",
+                "italic",
+                "underline",
+                "strikethrough",
+                "fontSize",
+                "fontFamily",
+                "fontColor",
+                "horizontalAlignment",
+                "verticalAlignment",
+                "wrapText",
+                "shrinkToFit",
+                "textDirection",
+                "textRotation",
+                "verticalText",
+                "fill",
+                "border",
+                "numberFormat",
             ]);
-            // console.log(templateStyles);
 
-            const templateHeight = totalWorkBook.sheet(0).row(2).height();
+            const templateHeight = sheet.row(2).height();
+
+            /**
+             * ✅ 總表標題列補 I 欄
+             * 如果你的範本 I2 原本沒有標題，這裡會自動寫入。
+             */
+            sheet.cell("I2")
+                .value("實際銷售")
+                .style(templateStyles);
+
+            /**
+             * ✅ 資料從第 3 列開始
+             */
             const startRow = 3;
+
             for (let i = 0; i < allEmployeeData.length; i++) {
                 let index = i + startRow;
 
-                totalWorkBook.sheet(0).range(`B${index}:C${index}`).merged(true).style(templateStyles); //合併存格
-                totalWorkBook.sheet(0).range(`D${index}:E${index}`).merged(true).style(templateStyles); //合併存格
-
-                totalWorkBook.sheet(0).cell(`A${index}`)
-                    .value(allEmployeeData[i]?.name)
+                /**
+                 * ✅ 合併欄位
+                 */
+                sheet.range(`B${index}:C${index}`)
+                    .merged(true)
                     .style(templateStyles);
 
-                totalWorkBook.sheet(0).cell(`B${index}`)
-                    .value(allEmployeeData[i]?.missName)
+                sheet.range(`D${index}:E${index}`)
+                    .merged(true)
                     .style(templateStyles);
 
-                totalWorkBook.sheet(0).cell(`D${index}`)
-                    .value(allEmployeeData[i]?.matchedParam?.department)
+                /**
+                 * ✅ A 姓名
+                 */
+                sheet.cell(`A${index}`)
+                    .value(allEmployeeData[i]?.name || "")
                     .style(templateStyles);
 
-                totalWorkBook.sheet(0).cell(`F${index}`)
-                    .value(allEmployeeData[i]?.zeroMonthValue)
+                /**
+                 * ✅ B:C 職稱
+                 */
+                sheet.cell(`B${index}`)
+                    .value(allEmployeeData[i]?.missName || "")
                     .style(templateStyles);
 
-                totalWorkBook.sheet(0).cell(`G${index}`)
-                    .value(allEmployeeData[i]?.pointFiveMonthValue)
+                /**
+                 * ✅ D:E 服務部門
+                 */
+                sheet.cell(`D${index}`)
+                    .value(allEmployeeData[i]?.matchedParam?.department || "")
                     .style(templateStyles);
 
-                totalWorkBook.sheet(0).cell(`H${index}`)
-                    .value(allEmployeeData[i]?.oneMonthValue)
+                /**
+                 * ✅ F 0 月
+                 */
+                sheet.cell(`F${index}`)
+                    .value(allEmployeeData[i]?.zeroMonthValue || "")
                     .style(templateStyles);
 
-                totalWorkBook.sheet(0).row(index).height(templateHeight);
+                /**
+                 * ✅ G 0.5 月
+                 */
+                sheet.cell(`G${index}`)
+                    .value(allEmployeeData[i]?.pointFiveMonthValue || "")
+                    .style(templateStyles);
+
+                /**
+                 * ✅ H 1 月
+                 */
+                sheet.cell(`H${index}`)
+                    .value(allEmployeeData[i]?.oneMonthValue || "")
+                    .style(templateStyles);
+
+                /**
+                 * ✅ I 實際銷售
+                 * 來源：紀錄表 L 欄
+                 */
+                sheet.cell(`I${index}`)
+                    .value(allEmployeeData[i]?.actualSalesValue || "")
+                    .style(templateStyles);
+
+                sheet.row(index).height(templateHeight);
             }
-            const lastRow = allEmployeeData.length + startRow
 
-            totalWorkBook.sheet(0).cell(`A${lastRow}`).value(`合計:${allEmployeeData.length}人`).style(templateStyles);
-            totalWorkBook.sheet(0).row(lastRow).height(templateHeight);
-            totalWorkBook.sheet(0).range(`B${lastRow}:C${lastRow}`).merged(true).style(templateStyles); //合併存格
-            totalWorkBook.sheet(0).range(`D${lastRow}:E${lastRow}`).merged(true).style(templateStyles); //合併存格
-            totalWorkBook.sheet(0).range(`F${lastRow}:H${lastRow}`).style(templateStyles); //合併存格
+            /**
+             * ✅ 合計列
+             */
+            const lastRow = allEmployeeData.length + startRow;
 
-            totalWorkBook.sheet(0).cell(`F${lastRow}`)
+            sheet.cell(`A${lastRow}`)
+                .value(`合計:${allEmployeeData.length}人`)
+                .style(templateStyles);
+
+            sheet.row(lastRow).height(templateHeight);
+
+            sheet.range(`B${lastRow}:C${lastRow}`)
+                .merged(true)
+                .style(templateStyles);
+
+            sheet.range(`D${lastRow}:E${lastRow}`)
+                .merged(true)
+                .style(templateStyles);
+
+            sheet.range(`F${lastRow}:I${lastRow}`)
+                .style(templateStyles);
+
+            /**
+             * ✅ 0 月人數
+             */
+            sheet.cell(`F${lastRow}`)
                 .formula(`=IFERROR(COUNTIF(F${startRow}:F${lastRow - 1},"✔"),"")`)
                 .style(templateStyles);
 
-            totalWorkBook.sheet(0).cell(`G${lastRow}`)
+            /**
+             * ✅ 0.5 月人數
+             */
+            sheet.cell(`G${lastRow}`)
                 .formula(`=IFERROR(COUNTIF(G${startRow}:G${lastRow - 1},"✔"),"")`)
                 .style(templateStyles);
 
-            totalWorkBook.sheet(0).cell(`H${lastRow}`)
+            /**
+             * ✅ 1 月人數
+             */
+            sheet.cell(`H${lastRow}`)
                 .formula(`=IFERROR(COUNTIF(H${startRow}:H${lastRow - 1},"✔"),"")`)
                 .style(templateStyles);
 
-            // 產生總表
+            /**
+             * ✅ I 欄實際銷售合計
+             *
+             * 如果 L 欄是「21盒」這種文字，不建議直接 SUM。
+             * 這裡先留空。
+             */
+            sheet.cell(`I${lastRow}`)
+                .value("")
+                .style(templateStyles);
 
+            /**
+             * ✅ 產生總表
+             */
             let date = new Date();
-            const currentDateTime = moment(date).format('YYYY-MM-DD HH-mm-ss');
+            const currentDateTime = moment(date).format("YYYY-MM-DD HH-mm-ss");
+
             const fileName = `員工獎金總表 (${currentDateTime}).xlsx`;
-            const pathFileName = path.resolve(__dirname, "../public", "office", "excel", "EmployeeBonusExcel", fileName);
+
+            const pathFileName = path.resolve(
+                __dirname,
+                "../public",
+                "office",
+                "excel",
+                "EmployeeBonusExcel",
+                fileName
+            );
+
             await totalWorkBook.toFileAsync(pathFileName);
 
             setTimeout(() => {
@@ -2113,28 +2299,30 @@ class OfficeService {
                             console.log(error);
                             return false;
                         }
-                        console.log('刪除檔案成功');
+
+                        console.log("刪除檔案成功");
                     });
                 } catch (e) {
                     console.log(e);
                 }
-            }, 30 * 1000); //30秒
+            }, 30 * 1000);
 
             return {
                 success: 1,
                 message: {
-                    excelName: fileName
-                }
-            }
+                    excelName: fileName,
+                },
+            };
 
         } catch (e) {
             console.log(e);
+
             return {
                 success: -1,
-                message: "合併失敗"
-            }
+                message: "合併失敗",
+            };
         }
-    }
+    };
 
     mergeAutBonusExcelAction=async (req)=>{
         const {excelArray} = req?.body;
